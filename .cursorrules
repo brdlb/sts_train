@@ -1,0 +1,22 @@
+# Code Style Rules
+
+## Language and Comments
+
+- All code comments and docstrings must be written in English
+- Error messages and user-facing strings should be in English
+- Documentation and README files can be in any language, but code-related documentation should be in English
+
+## Code Quality
+
+- Follow PEP 8 style guide for Python code
+- Use type hints where appropriate
+- Write clear, descriptive docstrings for all public functions and classes
+- Keep functions focused and single-purpose
+- Use meaningful variable and function names
+
+## Project Structure
+
+- Maintain modular architecture
+- Keep imports organized and grouped
+- Separate game logic, agents, training, and utilities into distinct modules
+

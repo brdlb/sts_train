@@ -1,0 +1,12 @@
+# Core dependencies for Perudo RL Environment
+gymnasium>=0.29.0
+torch>=2.0.0
+stable-baselines3>=2.0.0
+tensorboard>=2.13.0
+numpy>=1.24.0
+
+# Development dependencies
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.0.0
+flake8>=6.0.0
