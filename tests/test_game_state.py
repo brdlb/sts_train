@@ -1,5 +1,5 @@
 """
-Тесты для класса GameState.
+Tests for the GameState class.
 """
 
 import pytest
@@ -8,7 +8,7 @@ from src.perudo.game.game_state import GameState
 
 
 def test_game_state_initialization():
-    """Тест инициализации состояния игры."""
+    """Test game state initialization."""
     game_state = GameState(num_players=4, dice_per_player=5)
     assert game_state.num_players == 4
     assert game_state.dice_per_player == 5
@@ -20,7 +20,7 @@ def test_game_state_initialization():
 
 
 def test_roll_dice():
-    """Тест броска костей."""
+    """Test rolling dice."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
     
@@ -30,29 +30,29 @@ def test_roll_dice():
 
 
 def test_set_bid():
-    """Тест установки ставки."""
+    """Test setting a bid."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
     
-    # Первая ставка
+    # First bid
     assert game_state.set_bid(0, 3, 4)
     assert game_state.current_bid == (3, 4)
     
-    # Вторая ставка должна быть выше
+    # Second bid must be higher
     game_state.current_player = 1
-    assert game_state.set_bid(1, 4, 4)  # Больше количество
-    assert game_state.set_bid(1, 3, 5)  # Больше значение
+    assert game_state.set_bid(1, 4, 4)  # Higher quantity
+    assert game_state.set_bid(1, 4, 5)  # Same quantity, higher value (Perudo rule)
 
 
 def test_challenge_bid():
-    """Тест вызова ставки."""
+    """Test challenging a bid."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
     
-    # Устанавливаем ставку
+    # Set a bid
     game_state.set_bid(0, 10, 4)
     
-    # Вызываем ставку
+    # Challenge the bid
     success, actual_count, bid_quantity = game_state.challenge_bid(1)
     
     assert isinstance(success, bool)
@@ -61,7 +61,7 @@ def test_challenge_bid():
 
 
 def test_lose_dice():
-    """Тест потери костей."""
+    """Test dice loss."""
     game_state = GameState(num_players=2, dice_per_player=5)
     
     initial_count = game_state.player_dice_count[0]
@@ -69,14 +69,14 @@ def test_lose_dice():
     
     assert game_state.player_dice_count[0] == initial_count - 1
     
-    # Проверка активации пальфико
+    # Testing palifico activation
     game_state.player_dice_count[0] = 1
-    game_state.lose_dice(0, 0)  # Не теряем кость, но проверяем статус
+    game_state.lose_dice(0, 0)  # No actual dice lost, just check status
     assert game_state.palifico_active[0] or game_state.player_dice_count[0] > 0
 
 
 def test_reset():
-    """Тест сброса игры."""
+    """Test game reset."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.set_bid(0, 3, 4)
     game_state.current_player = 1
@@ -90,22 +90,22 @@ def test_reset():
 
 
 def test_game_over():
-    """Тест окончания игры."""
+    """Test end of game."""
     game_state = GameState(num_players=2, dice_per_player=5)
     
-    # Убираем кости у всех игроков кроме одного
+    # Remove dice from all players except one
     for i in range(1, game_state.num_players):
         game_state.player_dice_count[i] = 0
     
     game_state._check_game_over()
     
-    # Проверяем, что игра не завершена, если у одного игрока еще есть кости
+    # Check that game is not over if one player still has dice
     assert game_state.player_dice_count[0] > 0
     
-    # Убираем кости у последнего игрока
+    # Remove dice from last player
     game_state.player_dice_count[0] = 0
     game_state._check_game_over()
     
-    # Теперь игра должна быть завершена
+    # Game should now be over
     assert game_state.game_over
 

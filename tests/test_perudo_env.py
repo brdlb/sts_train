@@ -1,5 +1,5 @@
 """
-Тесты для Gymnasium среды Perudo.
+Tests for Gymnasium Perudo environment.
 """
 
 import pytest
@@ -8,7 +8,7 @@ from src.perudo.game.perudo_env import PerudoEnv
 
 
 def test_env_initialization():
-    """Тест инициализации среды."""
+    """Test environment initialization."""
     env = PerudoEnv(num_players=4, dice_per_player=5)
     
     assert env.num_players == 4
@@ -18,7 +18,7 @@ def test_env_initialization():
 
 
 def test_env_reset():
-    """Тест сброса среды."""
+    """Test environment reset."""
     env = PerudoEnv(num_players=2, dice_per_player=5)
     obs, info = env.reset()
     
@@ -30,14 +30,14 @@ def test_env_reset():
 
 
 def test_env_step():
-    """Тест выполнения шага в среде."""
+    """Test step function in environment."""
     env = PerudoEnv(num_players=2, dice_per_player=5)
     obs, info = env.reset()
     
-    # Выбираем случайное действие
+    # Choose a random action
     action = env.action_space.sample()
     
-    # Выполняем действие
+    # Execute action
     next_obs, reward, terminated, truncated, info = env.step(action)
     
     assert isinstance(next_obs, np.ndarray)
@@ -48,44 +48,44 @@ def test_env_step():
 
 
 def test_env_observation_shape():
-    """Тест формы наблюдения."""
+    """Test observation shape."""
     env = PerudoEnv(num_players=2, dice_per_player=5, history_length=10)
     obs, _ = env.reset()
     
-    expected_size = 2 + 10 * 3 + 2 + 1 + 2 + 1 + 5  # Все компоненты наблюдения
+    expected_size = 2 + 10 * 3 + 2 + 1 + 2 + 1 + 5  # All observation components
     assert obs.shape == (expected_size,)
 
 
 def test_env_action_space():
-    """Тест пространства действий."""
+    """Test actions space size."""
     env = PerudoEnv(num_players=2, dice_per_player=5, max_quantity=30)
     
-    # Размер должен быть: 2 (challenge, pacao) + 30 * 6 (ставки)
+    # Size should be: 2 (challenge, pacao) + 30 * 6 (bids)
     expected_size = 2 + 30 * 6
     assert env.action_space.n == expected_size
 
 
 def test_env_render():
-    """Тест визуализации среды."""
+    """Test environment rendering."""
     env = PerudoEnv(num_players=2, dice_per_player=5, render_mode="human")
     env.reset()
     
-    # Проверяем, что render не вызывает ошибок
+    # Check that render doesn't raise exceptions
     try:
         env.render()
     except Exception as e:
-        pytest.fail(f"render() вызвал исключение: {e}")
+        pytest.fail(f"render() raised an exception: {e}")
 
 
 def test_env_set_active_player():
-    """Тест установки активного игрока."""
+    """Test setting active player."""
     env = PerudoEnv(num_players=4, dice_per_player=5)
     env.reset()
     
-    # Устанавливаем активного игрока
+    # Set active player
     env.set_active_player(2)
     
-    # Получаем наблюдение для него
+    # Get observation for them
     obs = env.get_observation_for_player(2)
     
     assert isinstance(obs, np.ndarray)
@@ -93,15 +93,15 @@ def test_env_set_active_player():
 
 
 def test_env_game_over():
-    """Тест окончания игры."""
+    """Test game over in environment."""
     env = PerudoEnv(num_players=2, dice_per_player=5)
     obs, _ = env.reset()
     
-    # Симулируем окончание игры
+    # Simulate game over
     env.game_state.game_over = True
     env.game_state.winner = 0
     
-    # Выполняем действие (должно вернуть terminated=True)
+    # Execute action (should return terminated=True)
     action = env.action_space.sample()
     _, _, terminated, _, _ = env.step(action)
     

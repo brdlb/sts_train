@@ -1,4 +1,4 @@
 """
-Тесты для Perudo RL Environment.
+Tests for Perudo RL Environment.
 """
 
