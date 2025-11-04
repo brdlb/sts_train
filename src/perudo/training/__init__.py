@@ -3,7 +3,8 @@ Training module for agents.
 """
 
 from .config import Config, GameConfig, TrainingConfig, DEFAULT_CONFIG
-from .train import SelfPlayTraining, train_single_agent_loop, main
+from .train import SelfPlayTraining, main
+from .opponent_pool import OpponentPool, OpponentSnapshot
 
 __all__ = [
     "Config",
@@ -11,6 +12,7 @@ __all__ = [
     "TrainingConfig",
     "DEFAULT_CONFIG",
     "SelfPlayTraining",
-    "train_single_agent_loop",
     "main",
+    "OpponentPool",
+    "OpponentSnapshot",
 ]

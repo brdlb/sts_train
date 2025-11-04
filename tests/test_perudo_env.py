@@ -48,11 +48,13 @@ def test_env_step():
 
 
 def test_env_observation_shape():
-    """Test observation shape."""
+    """Test observation shape with agent_id."""
     env = PerudoEnv(num_players=2, dice_per_player=5, history_length=10)
     obs, _ = env.reset()
     
-    expected_size = 2 + 10 * 3 + 2 + 1 + 2 + 1 + 5  # All observation components
+    # New format: agent_id(num_players) + current_bid(2) + history(history_length*3) +
+    # dice_count(num_players) + current_player(1) + palifico(num_players) + pacao(1) + player_dice(5)
+    expected_size = 2 + 2 + 10 * 3 + 2 + 1 + 2 + 1 + 5
     assert obs.shape == (expected_size,)
 
 
@@ -90,6 +92,47 @@ def test_env_set_active_player():
     
     assert isinstance(obs, np.ndarray)
     assert len(obs) > 0
+
+
+def test_agent_id_in_observation():
+    """Test that agent_id is included in observation."""
+    env = PerudoEnv(num_players=4, dice_per_player=5)
+    
+    # Get observations for different players
+    obs_0, _ = env.reset()
+    env.set_active_player(0)
+    obs_0 = env.get_observation_for_player(0)
+    
+    env.set_active_player(1)
+    obs_1 = env.get_observation_for_player(1)
+    
+    env.set_active_player(2)
+    obs_2 = env.get_observation_for_player(2)
+    
+    env.set_active_player(3)
+    obs_3 = env.get_observation_for_player(3)
+    
+    # Check that agent_id one-hot encoding is correct
+    # First 4 values should be agent_id one-hot
+    assert obs_0[0] == 1.0  # Agent 0
+    assert obs_0[1] == 0.0
+    assert obs_0[2] == 0.0
+    assert obs_0[3] == 0.0
+    
+    assert obs_1[0] == 0.0
+    assert obs_1[1] == 1.0  # Agent 1
+    assert obs_1[2] == 0.0
+    assert obs_1[3] == 0.0
+    
+    assert obs_2[0] == 0.0
+    assert obs_2[1] == 0.0
+    assert obs_2[2] == 1.0  # Agent 2
+    assert obs_2[3] == 0.0
+    
+    assert obs_3[0] == 0.0
+    assert obs_3[1] == 0.0
+    assert obs_3[2] == 0.0
+    assert obs_3[3] == 1.0  # Agent 3
 
 
 def test_env_game_over():

@@ -107,6 +107,8 @@ def create_observation_vector(
     player_dice: List[int],  # Current player's dice (visible only to them)
     history_length: int = 10,
     max_players: int = 6,
+    agent_id: Optional[int] = None,
+    num_agents: int = 4,
 ) -> np.ndarray:
     """
     Create observation vector for agent.
@@ -121,11 +123,23 @@ def create_observation_vector(
         player_dice: Current player's dice
         history_length: Bid history length
         max_players: Maximum number of players
+        agent_id: Agent ID for one-hot encoding (0 to num_agents-1)
+        num_agents: Total number of agents (for one-hot encoding)
 
     Returns:
         Observation vector
     """
     obs_parts = []
+
+    # Agent ID one-hot encoding (num_agents values)
+    if agent_id is not None:
+        agent_id_onehot = np.zeros(num_agents, dtype=np.float32)
+        if 0 <= agent_id < num_agents:
+            agent_id_onehot[agent_id] = 1.0
+        obs_parts.append(agent_id_onehot)
+    else:
+        # If no agent_id provided, use zeros
+        obs_parts.append(np.zeros(num_agents, dtype=np.float32))
 
     # Current bid (2 values: quantity, value) or (0, 0) if no bid
     if current_bid is not None:

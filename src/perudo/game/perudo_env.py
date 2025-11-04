@@ -58,10 +58,12 @@ class PerudoEnv(gym.Env):
         )
 
         # Define observation space
-        # Format: [current_bid(2), history(history_length*3), dice_count(num_players),
-        #          current_player(1), palifico(num_players), pacao(1), player_dice(5)]
+        # Format: [agent_id(num_players), current_bid(2), history(history_length*3), 
+        #          dice_count(num_players), current_player(1), palifico(num_players), 
+        #          pacao(1), player_dice(5)]
         obs_size = (
-            2  # current_bid
+            num_players  # agent_id one-hot
+            + 2  # current_bid
             + history_length * 3  # history
             + num_players  # dice_count
             + 1  # current_player
@@ -299,6 +301,8 @@ class PerudoEnv(gym.Env):
             player_dice=player_dice,
             history_length=self.history_length,
             max_players=self.num_players,
+            agent_id=player_id,
+            num_agents=self.num_players,
         )
 
         return observation
