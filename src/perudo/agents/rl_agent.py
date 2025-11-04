@@ -4,12 +4,36 @@ RL agent based on Stable Baselines3.
 
 import numpy as np
 from typing import Optional
+import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from .base_agent import BaseAgent
 from ..game.perudo_env import PerudoEnv
+
+
+def get_device(device: Optional[str] = None) -> str:
+    """
+    Get device for training with automatic GPU detection and CPU fallback.
+    
+    Args:
+        device: Device string (e.g., "cpu", "cuda", "cuda:0"). 
+                If None, automatically detects GPU and falls back to CPU.
+    
+    Returns:
+        Device string to use for training
+    """
+    if device is not None:
+        return device
+    
+    # Try to use GPU if available
+    if torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
+    
+    return device
 
 
 class RLAgent(BaseAgent):
@@ -21,6 +45,7 @@ class RLAgent(BaseAgent):
         env: PerudoEnv,
         model: Optional[PPO] = None,
         policy: str = "MlpPolicy",
+        device: Optional[str] = None,  # If None, auto-detects GPU with CPU fallback
         learning_rate: float = 3e-4,
         n_steps: int = 2048,
         batch_size: int = 64,
@@ -41,6 +66,7 @@ class RLAgent(BaseAgent):
             env: Perudo environment
             model: Existing PPO model (if any)
             policy: Policy type
+            device: Device string (e.g., "cpu", "cuda"). If None, auto-detects GPU with CPU fallback
             learning_rate: Learning rate
             n_steps: Number of steps to collect data before update
             batch_size: Batch size for training
@@ -68,10 +94,14 @@ class RLAgent(BaseAgent):
 
             self.vec_env = DummyVecEnv([make_env])
 
+            # Determine device for training (GPU with CPU fallback)
+            device_str = get_device(device)
+
             # Create PPO model
             self.model = PPO(
                 policy=policy,
                 env=self.vec_env,
+                device=device_str,
                 learning_rate=learning_rate,
                 n_steps=n_steps,
                 batch_size=batch_size,

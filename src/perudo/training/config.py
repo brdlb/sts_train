@@ -23,6 +23,7 @@ class TrainingConfig:
 
     # PPO parameters
     policy: str = "MlpPolicy"
+    device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     learning_rate: float = 3e-4
     n_steps: int = 2048
     batch_size: int = 64

@@ -3,23 +3,51 @@ Main script for training Perudo agents with parameter sharing and self-play.
 """
 
 import os
+import time
+import threading
 import numpy as np
 from typing import List, Optional
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
-from stable_baselines3.common.vec_env import VecNormalize
+from stable_baselines3.common.vec_env import VecNormalize, VecMonitor
 
 from ..game.perudo_vec_env import PerudoMultiAgentVecEnv
 from .config import Config, DEFAULT_CONFIG
 from .opponent_pool import OpponentPool
 
 import sys
+import torch
 
 # --- Очистка модуля из sys.modules, чтобы избежать предупреждения runpy ---
 if __name__ == "__main__":
     modname = __name__
     if modname in sys.modules:
         del sys.modules[modname]
+
+
+def get_device(device: Optional[str] = None) -> str:
+    """
+    Get device for training with automatic GPU detection and CPU fallback.
+    
+    Args:
+        device: Device string (e.g., "cpu", "cuda", "cuda:0"). 
+                If None, automatically detects GPU and falls back to CPU.
+    
+    Returns:
+        Device string to use for training
+    """
+    if device is not None:
+        return device
+    
+    # Try to use GPU if available
+    if torch.cuda.is_available():
+        device = "cuda"
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        device = "cpu"
+        print("CUDA not available, using CPU")
+    
+    return device
 
 
 class AdvantageNormalizationCallback(BaseCallback):
@@ -71,39 +99,132 @@ class SelfPlayTrainingCallback(BaseCallback):
         opponent_pool: OpponentPool,
         snapshot_freq: int = 50000,
         verbose: int = 0,
-        print_freq: int = 1000
+        print_freq: int = 1000,
+        print_interval_seconds: float = 10.0,
+        debug: bool = False
     ):
         super().__init__(verbose)
         self.opponent_pool = opponent_pool
         self.snapshot_freq = snapshot_freq
         self.print_freq = print_freq
+        self.print_interval_seconds = print_interval_seconds
+        self.debug = debug
         self.current_step = 0
         self.vec_env = None
         # Буферы для realtime-статистики
         self.episode_rewards = []
         self.episode_lengths = []
         self.episode_wins = []
+        # Для потокобезопасного доступа
+        self._lock = threading.Lock()
+        # Флаг для остановки потока вывода статистики
+        self._stop_print_thread = False
+        self._print_thread = None
+        # Счетчики вызовов для отладки
+        self._on_step_calls = 0
+        self._on_rollout_end_calls = 0
+        self._last_step_time = None
+
+    def _print_statistics_loop(self):
+        """Фоновый поток для периодического вывода статистики."""
+        while not self._stop_print_thread:
+            time.sleep(self.print_interval_seconds)
+            if self._stop_print_thread:
+                break
+            
+            with self._lock:
+                if len(self.episode_rewards) > 0:
+                    avg_reward = np.mean(self.episode_rewards[-100:])
+                    avg_length = np.mean(self.episode_lengths[-100:])
+                    win_rate = 100 * np.mean(self.episode_wins[-100:]) if self.episode_wins else 0
+                else:
+                    avg_reward = 0
+                    avg_length = 0
+                    win_rate = 0
+            
+            print(f"[Step {self.current_step}] AvgReward(100): {avg_reward:.2f}, "
+                  f"AvgLen(100): {avg_length:.1f}, WinRate(100): {win_rate:.1f}%, "
+                  f"Completed episodes: {len(self.episode_rewards)}")
+            
+            if self.debug:
+                print(f"[DEBUG] _on_step called: {self._on_step_calls} times, "
+                      f"_on_rollout_end called: {self._on_rollout_end_calls} times")
+                if self._last_step_time:
+                    elapsed = time.time() - self._last_step_time
+                    print(f"[DEBUG] Time since last _on_step: {elapsed:.2f}s")
 
     def _on_training_start(self) -> None:
         if hasattr(self.model, 'env'):
             self.vec_env = self.model.env
+        
+        # Get underlying env if wrapped in VecMonitor
+        if hasattr(self.vec_env, 'envs'):  # VecMonitor has envs attribute
+            self._underlying_env = self.vec_env.envs[0] if hasattr(self.vec_env.envs, '__getitem__') else None
+        else:
+            self._underlying_env = None
+        
+        print(f"[DEBUG] Training started. Print interval: {self.print_interval_seconds}s")
+        
+        # Log model and env info
+        if self.debug:
+            print(f"[DEBUG] Model type: {type(self.model)}")
+            print(f"[DEBUG] Env type: {type(self.vec_env)}")
+            if hasattr(self.model, 'n_steps'):
+                print(f"[DEBUG] Model n_steps: {self.model.n_steps}")
+            if hasattr(self.vec_env, 'num_envs'):
+                print(f"[DEBUG] VecEnv num_envs: {self.vec_env.num_envs}")
+            
+            # Important: Calculate expected callback frequency
+            if hasattr(self.model, 'n_steps') and hasattr(self.vec_env, 'num_envs'):
+                steps_per_rollout = self.model.n_steps * self.vec_env.num_envs
+                print(f"[DEBUG] Steps per rollout: {steps_per_rollout}")
+                print(f"[DEBUG] _on_step will be called once per {steps_per_rollout} environment steps")
+                print(f"[DEBUG] _on_rollout_end will be called once per {steps_per_rollout} environment steps")
+                print(f"[DEBUG] If episodes take ~50 steps, expect _on_step/_on_rollout_end every ~{steps_per_rollout // 50} episodes")
+        
+        # Запускаем фоновый поток для периодического вывода статистики
+        self._stop_print_thread = False
+        self._print_thread = threading.Thread(target=self._print_statistics_loop, daemon=True)
+        self._print_thread.start()
+        print(f"[DEBUG] Statistics print thread started")
+    
+    def _on_training_end(self) -> None:
+        """Останавливаем поток вывода статистики при завершении тренировки."""
+        self._stop_print_thread = True
+        if self._print_thread and self._print_thread.is_alive():
+            self._print_thread.join(timeout=1.0)
+        print(f"[DEBUG] Training ended. Total _on_step calls: {self._on_step_calls}, "
+              f"Total _on_rollout_end calls: {self._on_rollout_end_calls}")
     
     def _on_step(self) -> bool:
+        self._on_step_calls += 1
+        step_time = time.time()
+        
+        if self.debug:
+            if self._on_step_calls == 1:
+                print(f"[DEBUG] First _on_step called at {time.strftime('%H:%M:%S')}")
+                print(f"[DEBUG] This callback is called after each rollout collection (n_steps * num_envs steps)")
+            
+            # Log every step for first 10 calls, then every 100th
+            if self._on_step_calls <= 10 or self._on_step_calls % 100 == 0:
+                elapsed = step_time - self._last_step_time if self._last_step_time else 0
+                print(f"[DEBUG] _on_step #{self._on_step_calls} called at {time.strftime('%H:%M:%S')}, "
+                      f"elapsed since last: {elapsed:.2f}s")
+        
+        self._last_step_time = step_time
         self.current_step += 1
+        
         # Собираем episode_info из infos всех env (SB3 их передаёт в self.locals["infos"])
         infos = self.locals.get("infos", [])
         for info in infos:
             # Добавляем статистику только если эпизод завершен (info содержит episode_reward)
             if isinstance(info, dict) and "episode_reward" in info:
-                self.episode_rewards.append(info["episode_reward"])
-                self.episode_lengths.append(info["episode_length"])
-                win = 1 if info.get("winner", -1) == 0 else 0
-                self.episode_wins.append(win)
-        if self.current_step % self.print_freq == 0:
-            avg_reward = np.mean(self.episode_rewards[-100:]) if self.episode_rewards else 0
-            avg_length = np.mean(self.episode_lengths[-100:]) if self.episode_lengths else 0
-            win_rate = 100 * np.mean(self.episode_wins[-100:]) if self.episode_wins else 0
-            print(f"[Step {self.current_step}] AvgReward(100): {avg_reward:.2f}, AvgLen(100): {avg_length:.1f}, WinRate(100): {win_rate:.1f}%, Completed episodes: {len(self.episode_rewards)}")
+                with self._lock:
+                    self.episode_rewards.append(info["episode_reward"])
+                    self.episode_lengths.append(info["episode_length"])
+                    win = 1 if info.get("winner", -1) == 0 else 0
+                    self.episode_wins.append(win)
+        
         # Стандартная логика снапшотов и синхронизации
         if self.current_step % self.snapshot_freq == 0:
             self.opponent_pool.save_snapshot(
@@ -115,12 +236,47 @@ class SelfPlayTrainingCallback(BaseCallback):
                 pool_stats = self.opponent_pool.get_statistics()
                 print(f"Saved snapshot at step {self.current_step}")
                 print(f"Pool statistics: {pool_stats}")
+        
         # Update vec_env with current step for opponent sampling
-        if self.vec_env is not None and hasattr(self.vec_env, 'reset'):
-            self.vec_env.current_step = self.current_step
+        # VecMonitor should forward attributes, but we try both wrapped and underlying env
+        if self.vec_env is not None:
+            try:
+                # Try to set on wrapped env (VecMonitor should forward)
+                if hasattr(self.vec_env, 'current_step'):
+                    self.vec_env.current_step = self.current_step
+                # Also try underlying env if accessible
+                elif hasattr(self.vec_env, 'envs') and len(self.vec_env.envs) > 0:
+                    # VecMonitor wraps the original env
+                    underlying = getattr(self.vec_env, 'env', None) or getattr(self.vec_env, 'venv', None)
+                    if underlying is not None and hasattr(underlying, 'current_step'):
+                        underlying.current_step = self.current_step
+            except AttributeError:
+                # If setting fails, it's okay - opponent sampling will use default
+                pass
         return True
     
     def _on_rollout_end(self) -> bool:
+        self._on_rollout_end_calls += 1
+        rollout_end_time = time.time()
+        
+        if self.debug:
+            if self._on_rollout_end_calls == 1:
+                print(f"[DEBUG] First _on_rollout_end called at {time.strftime('%H:%M:%S')}")
+            
+            # Log every 10th rollout end for visibility
+            if self._on_rollout_end_calls % 10 == 0:
+                elapsed = rollout_end_time - self._last_step_time if self._last_step_time else 0
+                print(f"[DEBUG] _on_rollout_end called {self._on_rollout_end_calls} times. "
+                      f"Current step: {self.current_step}, "
+                      f"Time since last _on_step: {elapsed:.2f}s")
+        
+        # Check rollout buffer info
+        if self.debug and hasattr(self.model, 'rollout_buffer'):
+            buffer = self.model.rollout_buffer
+            if buffer is not None and hasattr(buffer, 'size'):
+                print(f"[DEBUG] Rollout buffer size: {buffer.size}, "
+                      f"pos: {getattr(buffer, 'pos', 'N/A')}")
+        
         # Winrate statistics are updated in VecEnv.step_wait() when episodes end, so we don't need to do anything here
         return True
 
@@ -162,7 +318,7 @@ class SelfPlayTraining:
         )
         
         # Create vectorized environment
-        self.vec_env = PerudoMultiAgentVecEnv(
+        vec_env_raw = PerudoMultiAgentVecEnv(
             num_envs=self.num_envs,
             num_players=self.num_players,
             dice_per_player=config.game.dice_per_player,
@@ -172,11 +328,26 @@ class SelfPlayTraining:
             opponent_pool=self.opponent_pool,
         )
         
+        # Wrap with VecMonitor for CSV logging of episode statistics
+        # This will save episode rewards, lengths, and times to CSV files
+        monitor_dir = os.path.join(config.training.log_dir, "monitor")
+        os.makedirs(monitor_dir, exist_ok=True)
+        self.vec_env = VecMonitor(vec_env_raw, monitor_dir)
+        
+        # Store reference to original env for direct access if needed
+        # VecMonitor should forward attributes, but we keep reference just in case
+        self._vec_env_raw = vec_env_raw
+        
+        # Determine device for training (GPU with CPU fallback)
+        device = get_device(config.training.device)
+        
         # Create PPO model with parameter sharing
         # One model for all agents (agent_id is in observation)
+        # verbose=1 enables built-in progress bar showing timesteps and episode rewards
         self.model = PPO(
             policy=config.training.policy,
             env=self.vec_env,
+            device=device,
             learning_rate=config.training.learning_rate,
             n_steps=config.training.n_steps,
             batch_size=config.training.batch_size,
@@ -187,11 +358,13 @@ class SelfPlayTraining:
             ent_coef=config.training.ent_coef,
             vf_coef=config.training.vf_coef,
             max_grad_norm=config.training.max_grad_norm,
-            verbose=config.training.verbose,
+            verbose=config.training.verbose,  # 1 = progress bar, 0 = no output
         )
         
         # Update opponent pool with current model
+        # VecMonitor forwards attributes, but we also set it on raw env for safety
         self.vec_env.current_model = self.model
+        self._vec_env_raw.current_model = self.model
         
         # Statistics
         self.episode_rewards = []
@@ -200,7 +373,9 @@ class SelfPlayTraining:
         
     def train(self):
         """Main training loop."""
+        device_str = str(self.model.device)
         print(f"Starting training with parameter sharing")
+        print(f"Device: {device_str}")
         print(f"Number of environments (tables): {self.num_envs}")
         print(f"Number of players per table: {self.num_players}")
         print(f"Total timesteps: {self.config.training.total_timesteps}")
@@ -225,6 +400,8 @@ class SelfPlayTraining:
             opponent_pool=self.opponent_pool,
             snapshot_freq=50000,
             verbose=self.config.training.verbose,
+            print_interval_seconds=10.0,
+            debug=True  # Enable debug output to track callback calls
         )
         callbacks.append(selfplay_callback)
         
@@ -238,11 +415,21 @@ class SelfPlayTraining:
         
         # Train model
         tb_log_name = self.config.training.tb_log_name or "perudo_training"
+        
+        print(f"[DEBUG] About to start model.learn()")
+        print(f"[DEBUG] n_steps={self.config.training.n_steps}, num_envs={self.num_envs}")
+        print(f"[DEBUG] Steps per rollout = {self.config.training.n_steps * self.num_envs}")
+        print(f"[DEBUG] This means _on_step will be called approximately every {self.config.training.n_steps * self.num_envs} environment steps")
+        
+        start_time = time.time()
         self.model.learn(
             total_timesteps=self.config.training.total_timesteps,
             tb_log_name=tb_log_name,
             callback=callbacks,
+            progress_bar=True,  # Enable progress bar for better visibility
         )
+        elapsed_time = time.time() - start_time
+        print(f"[DEBUG] model.learn() completed in {elapsed_time:.2f}s")
         
         print("Training completed!")
         
@@ -308,6 +495,12 @@ def main():
         default=64,
         help="Batch size for training",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Device to use for training (cpu, cuda, cuda:0, etc.). If not specified, auto-detects GPU with CPU fallback.",
+    )
     
     args = parser.parse_args()
     
@@ -317,6 +510,7 @@ def main():
     config.training.total_timesteps = args.total_timesteps
     config.training.n_steps = args.n_steps
     config.training.batch_size = args.batch_size
+    config.training.device = args.device
     
     # Add num_envs to config
     if not hasattr(config.training, 'num_envs'):

@@ -20,3 +20,9 @@
 - Keep imports organized and grouped
 - Separate game logic, agents, training, and utilities into distinct modules
 
+## Running Training
+
+- The correct way to run training is: `python -m src.perudo.training.train`
+- This command should be run from the project root directory
+- Additional command-line arguments can be passed after the command (e.g., `--total-timesteps 10000`)
+
