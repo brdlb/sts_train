@@ -3,6 +3,8 @@ RL agent based on Stable Baselines3.
 """
 
 import numpy as np
+import contextlib
+from io import StringIO
 from typing import Optional
 import torch
 from stable_baselines3 import PPO
@@ -174,7 +176,9 @@ class RLAgent(BaseAgent):
         Args:
             path: Path to saved model
         """
-        self.model = PPO.load(path, env=self.env)
+        # Suppress SB3 wrapping messages
+        with contextlib.redirect_stdout(StringIO()):
+            self.model = PPO.load(path, env=self.env)
 
     def reset(self):
         """Reset agent state."""

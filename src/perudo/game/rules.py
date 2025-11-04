@@ -50,10 +50,14 @@ class PerudoRules:
                     False,
                     f"Bid must be higher than previous ({prev_quantity}x{prev_value})",
                 )
+            # Palifico rule
+            if game_state.palifico_active[player_id]:
+                if value != prev_value:
+                    return False, "Palifico player cannot change value"
 
         # Check maximum quantity (cannot exceed total dice count)
         total_dice = sum(game_state.player_dice_count)
-        max_possible = total_dice * 2  # Considering pasari
+        max_possible = total_dice  # Considering pasari
         if quantity > max_possible:
             return False, f"Quantity cannot exceed {max_possible}"
 
@@ -107,8 +111,8 @@ class PerudoRules:
         if game_state.pacao_called:
             return False, "Pacao already called"
 
-        if game_state.player_dice_count[player_id] == 0:
-            return False, "Player already out of game"
+        if game_state.player_dice_count[player_id] != 1:
+            return False, "Only players with one die can call pacao"
 
         return True, ""
 
@@ -133,16 +137,11 @@ class PerudoRules:
         Returns:
             Tuple (ID of player who loses die, number of dice lost)
         """
-        # Find previous player (who made the bid)
-        previous_player = None
-        for i in range(len(game_state.bid_history) - 1, -1, -1):
-            player_id, _, _ = game_state.bid_history[i]
-            if player_id != challenger_id:
-                previous_player = player_id
-                break
+        # The player who made the bid is the last one in the history
+        if not game_state.bid_history:
+            return challenger_id, 1
 
-        if previous_player is None:
-            return challenger_id, 1  # If not found, challenger loses
+        previous_player = game_state.bid_history[-1][0]
 
         # If challenge succeeded (bid was wrong), player who made bid loses die
         # If challenge failed (bid was correct), challenger loses die
@@ -174,16 +173,10 @@ class PerudoRules:
         Returns:
             Tuple (ID of player who loses die, number of dice lost)
         """
-        # Find previous player (who made the bid)
-        previous_player = None
-        for i in range(len(game_state.bid_history) - 1, -1, -1):
-            player_id, _, _ = game_state.bid_history[i]
-            if player_id != caller_id:
-                previous_player = player_id
-                break
-
-        if previous_player is None:
+        if not game_state.bid_history:
             return caller_id, 1
+
+        previous_player = game_state.bid_history[-1][0]
 
         # If pacao succeeded (actual >= bid), player who made bid loses die
         # If pacao failed (actual < bid), caller loses die
@@ -233,14 +226,14 @@ class PerudoRules:
         if game_state.current_bid is None:
             # First bid - can be any
             min_quantity = 1
-            max_quantity = sum(game_state.player_dice_count) * 2  # Considering pasari
+            max_quantity = sum(game_state.player_dice_count)  # Considering pasari
             for q in range(min_quantity, min(max_quantity + 1, 30)):  # Limit to reasonable maximum
                 for v in range(1, game_state.total_dice_values + 1):
                     actions.append(("bid", q, v))
         else:
             # Subsequent bids must be higher
             prev_quantity, prev_value = game_state.current_bid
-            max_quantity = sum(game_state.player_dice_count) * 2
+            max_quantity = sum(game_state.player_dice_count)
             for q in range(prev_quantity, min(max_quantity + 1, 30)):
                 for v in range(1, game_state.total_dice_values + 1):
                     if game_state._is_bid_higher(q, v, prev_quantity, prev_value):
