@@ -68,6 +68,8 @@ class GameState:
     def roll_dice(self) -> None:
         """Roll dice for all players."""
         self.player_dice = []
+        # Reset palifico status at the start of each round
+        self.palifico_active = [count == 1 for count in self.player_dice_count]
         for player_id in range(self.num_players):
             dice = np.random.randint(1, self.total_dice_values + 1, size=self.player_dice_count[player_id]).tolist()
             self.player_dice.append(dice)
@@ -137,16 +139,28 @@ class GameState:
         Returns:
             True if new bid is higher
         """
-        # Pasari (1) counts as double value
-        # Double the quantity for pasari
-        effective_q1 = q1 * 2 if v1 == 1 else q1
-        effective_q2 = q2 * 2 if v2 == 1 else q2
-
-        if effective_q1 > effective_q2:
-            return True
-        if effective_q1 == effective_q2 and v1 > v2:
-            return True
-        return False
+        # Previous bid was not aces
+        if v2 != 1:
+            # New bid is aces
+            if v1 == 1:
+                required_quantity = (q2 + 1) // 2
+                return q1 >= required_quantity
+            # New bid is not aces
+            else:
+                if q1 > q2:
+                    return True
+                if q1 == q2 and v1 > v2:
+                    return True
+                return False
+        # Previous bid was aces
+        else:  # v2 == 1
+            # New bid is also aces
+            if v1 == 1:
+                return q1 > q2
+            # New bid is not aces
+            else:
+                required_quantity = q2 * 2 + 1
+                return q1 >= required_quantity
 
     def challenge_bid(self, challenger_id: int) -> Tuple[bool, int, int]:
         """
@@ -161,15 +175,15 @@ class GameState:
         if self.current_bid is None:
             return False, 0, 0
 
-        # Find previous player (who made the bid)
-        previous_player = None
-        for i in range(len(self.bid_history) - 1, -1, -1):
-            player_id, _, _ = self.bid_history[i]
-            if player_id != challenger_id:
-                previous_player = player_id
-                break
+        if not self.bid_history:
+            return False, 0, 0
 
-        if previous_player is None:
+        # The player who made the bid is the last one in the history
+        previous_player = self.bid_history[-1][0]
+
+        # The challenger cannot be the one who made the bid
+        if previous_player == challenger_id:
+            # This case should not happen in a well-formed game
             return False, 0, 0
 
         quantity, value = self.current_bid
@@ -226,10 +240,6 @@ class GameState:
             self.player_dice_count[player_id] = max(
                 0, self.player_dice_count[player_id] - count
             )
-
-            # If player has 1 die left, activate palifico
-            if self.player_dice_count[player_id] == 1:
-                self.palifico_active[player_id] = True
 
             # Check game over
             if self.player_dice_count[player_id] == 0:

@@ -50,6 +50,10 @@ class PerudoRules:
                     False,
                     f"Bid must be higher than previous ({prev_quantity}x{prev_value})",
                 )
+            # Palifico rule
+            if game_state.palifico_active[player_id]:
+                if value != prev_value:
+                    return False, "Palifico player cannot change value"
 
         # Check maximum quantity (cannot exceed total dice count)
         total_dice = sum(game_state.player_dice_count)
@@ -107,8 +111,8 @@ class PerudoRules:
         if game_state.pacao_called:
             return False, "Pacao already called"
 
-        if game_state.player_dice_count[player_id] == 0:
-            return False, "Player already out of game"
+        if game_state.player_dice_count[player_id] != 1:
+            return False, "Only players with one die can call pacao"
 
         return True, ""
 
@@ -133,16 +137,11 @@ class PerudoRules:
         Returns:
             Tuple (ID of player who loses die, number of dice lost)
         """
-        # Find previous player (who made the bid)
-        previous_player = None
-        for i in range(len(game_state.bid_history) - 1, -1, -1):
-            player_id, _, _ = game_state.bid_history[i]
-            if player_id != challenger_id:
-                previous_player = player_id
-                break
+        # The player who made the bid is the last one in the history
+        if not game_state.bid_history:
+            return challenger_id, 1
 
-        if previous_player is None:
-            return challenger_id, 1  # If not found, challenger loses
+        previous_player = game_state.bid_history[-1][0]
 
         # If challenge succeeded (bid was wrong), player who made bid loses die
         # If challenge failed (bid was correct), challenger loses die
@@ -174,16 +173,10 @@ class PerudoRules:
         Returns:
             Tuple (ID of player who loses die, number of dice lost)
         """
-        # Find previous player (who made the bid)
-        previous_player = None
-        for i in range(len(game_state.bid_history) - 1, -1, -1):
-            player_id, _, _ = game_state.bid_history[i]
-            if player_id != caller_id:
-                previous_player = player_id
-                break
-
-        if previous_player is None:
+        if not game_state.bid_history:
             return caller_id, 1
+
+        previous_player = game_state.bid_history[-1][0]
 
         # If pacao succeeded (actual >= bid), player who made bid loses die
         # If pacao failed (actual < bid), caller loses die

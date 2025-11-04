@@ -64,7 +64,12 @@ def test_can_call_pacao():
     game_state.set_bid(0, 3, 4)
     game_state.current_player = 1
     
-    # Now can call pacao
+    # Player with 5 dice cannot call pacao
+    can_pacao, msg = PerudoRules.can_call_pacao(game_state, 1)
+    assert not can_pacao
+
+    # Player with 1 die can call pacao
+    game_state.player_dice_count[1] = 1
     can_pacao, msg = PerudoRules.can_call_pacao(game_state, 1)
     assert can_pacao
     
@@ -111,10 +116,14 @@ def test_get_available_actions():
     game_state.set_bid(0, 3, 4)
     game_state.current_player = 1
     
-    # The second player must have available actions: bid, challenge, and pacao
+    # The second player must have available actions: bid, challenge
     actions = PerudoRules.get_available_actions(game_state, 1)
     assert len(actions) > 0
     assert any(action[0] == "challenge" for action in actions)
-    assert any(action[0] == "pacao" for action in actions)
+    assert not any(action[0] == "pacao" for action in actions)
     assert any(action[0] == "bid" for action in actions)
 
+    # Player with 1 die should have pacao available
+    game_state.player_dice_count[1] = 1
+    actions = PerudoRules.get_available_actions(game_state, 1)
+    assert any(action[0] == "pacao" for action in actions)
