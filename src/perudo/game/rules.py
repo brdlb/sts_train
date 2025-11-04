@@ -50,8 +50,12 @@ class PerudoRules:
                     False,
                     f"Bid must be higher than previous ({prev_quantity}x{prev_value})",
                 )
-            # Palifico rule
-            if game_state.palifico_active[player_id]:
+            # Special round rule: cannot change dice value in subsequent bets
+            if game_state.special_round_active:
+                if value != prev_value:
+                    return False, "Cannot change dice value in special round"
+            # Palifico rule (for backward compatibility, but special round takes precedence)
+            elif game_state.palifico_active[player_id]:
                 if value != prev_value:
                     return False, "Palifico player cannot change value"
 
@@ -236,6 +240,9 @@ class PerudoRules:
             max_quantity = sum(game_state.player_dice_count)
             for q in range(prev_quantity, min(max_quantity + 1, 30)):
                 for v in range(1, game_state.total_dice_values + 1):
+                    # In special round, value cannot change
+                    if game_state.special_round_active and v != prev_value:
+                        continue
                     if game_state._is_bid_higher(q, v, prev_quantity, prev_value):
                         actions.append(("bid", q, v))
 

@@ -41,6 +41,7 @@ class GameState:
 
         # Game modes
         self.palifico_active: List[bool] = [False] * num_players  # Palifico active for player
+        self.special_round_active: bool = False  # Special round active when any player has 1 die
         self.pacao_called: bool = False  # Whether pacao was called
 
         # Game status
@@ -58,6 +59,7 @@ class GameState:
         self.current_player = 0
         self.player_dice_count = [self.dice_per_player] * self.num_players
         self.palifico_active = [False] * self.num_players
+        self.special_round_active = False
         self.pacao_called = False
         self.game_over = False
         self.winner = None
@@ -70,6 +72,8 @@ class GameState:
         self.player_dice = []
         # Reset palifico status at the start of each round
         self.palifico_active = [count == 1 for count in self.player_dice_count]
+        # Special round is active when any player has 1 die
+        self.special_round_active = any(count == 1 for count in self.player_dice_count)
         for player_id in range(self.num_players):
             dice = np.random.randint(1, self.total_dice_values + 1, size=self.player_dice_count[player_id]).tolist()
             self.player_dice.append(dice)
@@ -127,10 +131,13 @@ class GameState:
 
     def _is_bid_higher(self, q1: int, v1: int, q2: int, v2: int) -> bool:
         """
-        Check if bid (q1, v1) is higher than (q2, v2).
+        Check if bid (q1, v1) is higher than (q2, v2) according to new rules.
 
-        In Perudo: higher quantity OR same quantity but higher value.
-        Special rule: 1 (pasari) counts as "double" of any other value.
+        New rules:
+        1. Quantity can only increase (exception: can reduce by half when calling "ones")
+        2. If quantity same, value must increase
+        3. If quantity increases, any value can be called
+        4. If previous bet was "ones": can increase quantity of ones OR use different value with quantity = 2 * prev_ones + 1
 
         Args:
             q1, v1: New bid
@@ -139,28 +146,59 @@ class GameState:
         Returns:
             True if new bid is higher
         """
-        # Previous bid was not aces
-        if v2 != 1:
-            # New bid is aces
+        # Special case: if previous bet was "ones" (v2 == 1)
+        if v2 == 1:
+            # New bid must be either:
+            # - Increase quantity of ones (v1 == 1 and q1 > q2), OR
+            # - Different value with quantity >= 2 * q2 + 1
             if v1 == 1:
-                required_quantity = (q2 + 1) // 2
-                return q1 >= required_quantity
-            # New bid is not aces
+                return q1 > q2  # Must increase quantity of ones
             else:
-                if q1 > q2:
-                    return True
-                if q1 == q2 and v1 > v2:
-                    return True
-                return False
-        # Previous bid was aces
-        else:  # v2 == 1
-            # New bid is also aces
-            if v1 == 1:
-                return q1 > q2
-            # New bid is not aces
-            else:
-                required_quantity = q2 * 2 + 1
+                # Different value, must have quantity >= 2 * q2 + 1
+                required_quantity = 2 * q2 + 1
                 return q1 >= required_quantity
+        
+        # Previous bet was not "ones"
+        # If new bid is "ones", can reduce quantity by half (rounding up)
+        if v1 == 1:
+            # Can reduce by half (rounding up for odd numbers)
+            # So minimum quantity = ceil(q2 / 2) = (q2 + 1) // 2
+            required_quantity = (q2 + 1) // 2
+            return q1 >= required_quantity
+        
+        # Both bids are not "ones"
+        if q1 > q2:
+            return True  # Quantity increased, any value allowed
+        elif q1 == q2:
+            return v1 > v2  # Same quantity, value must increase
+        else:
+            return False  # Quantity decreased (not allowed)
+
+    def _count_dice_for_value(self, value: int) -> int:
+        """
+        Count dice with specified value, respecting special round rules.
+
+        In special round: ones are NOT jokers (only count exact matches)
+        In normal round: ones are jokers (count as any value except when bidding on 1s)
+
+        Args:
+            value: Dice value to count
+
+        Returns:
+            Total count of dice matching the value
+        """
+        total_count = 0
+        for player_dice in self.player_dice:
+            for die in player_dice:
+                if self.special_round_active:
+                    # In special round: ones are NOT jokers
+                    if die == value:
+                        total_count += 1
+                else:
+                    # In normal round: ones are jokers (except when bidding on 1s)
+                    if die == value or (die == 1 and value != 1):
+                        total_count += 1
+        return total_count
 
     def challenge_bid(self, challenger_id: int) -> Tuple[bool, int, int]:
         """
@@ -188,12 +226,8 @@ class GameState:
 
         quantity, value = self.current_bid
 
-        # Count all dice with specified value (including pasari)
-        total_count = 0
-        for player_dice in self.player_dice:
-            for die in player_dice:
-                if die == value or (die == 1 and value != 1):  # Pasari counts as any value, except when bidding on 1s
-                    total_count += 1
+        # Count all dice with specified value (respecting special round rules)
+        total_count = self._count_dice_for_value(value)
 
         # Challenge succeeds if actual count is less than bid
         challenge_success = total_count < quantity
@@ -215,12 +249,8 @@ class GameState:
 
         quantity, value = self.current_bid
 
-        # Count all dice
-        total_count = 0
-        for player_dice in self.player_dice:
-            for die in player_dice:
-                if die == value or (die == 1 and value != 1):  # Pasari counts as any value, except when bidding on 1s
-                    total_count += 1
+        # Count all dice (respecting special round rules)
+        total_count = self._count_dice_for_value(value)
 
         # Pacao succeeds if actual count is greater than or equal to bid
         pacao_success = total_count >= quantity
@@ -288,6 +318,7 @@ class GameState:
             "current_player": self.current_player,
             "player_dice_count": self.player_dice_count.copy(),
             "palifico_active": self.palifico_active.copy(),
+            "special_round_active": self.special_round_active,
             "pacao_called": self.pacao_called,
             "game_over": self.game_over,
             "winner": self.winner,
