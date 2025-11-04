@@ -163,7 +163,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
         """
         self._actions = actions
 
-    def step_wait(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
+    def step_wait(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
         """
         Wait for all environments to finish stepping.
 
@@ -250,11 +250,10 @@ class PerudoMultiAgentVecEnv(VecEnv):
             np.array(observations),
             np.array(rewards),
             np.array(dones),
-            np.array(dones),  # truncated (same as done for now)
             infos,
         )
 
-    def step(self, actions: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
+    def step(self, actions: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
         """
         Step all environments synchronously.
 
