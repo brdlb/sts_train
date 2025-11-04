@@ -192,7 +192,7 @@ class GameState:
         total_count = 0
         for player_dice in self.player_dice:
             for die in player_dice:
-                if die == value or die == 1:  # Pasari counts as any value
+                if die == value or (die == 1 and value != 1):  # Pasari counts as any value, except when bidding on 1s
                     total_count += 1
 
         # Challenge succeeds if actual count is less than bid
@@ -219,7 +219,7 @@ class GameState:
         total_count = 0
         for player_dice in self.player_dice:
             for die in player_dice:
-                if die == value or die == 1:  # Pasari counts as any value
+                if die == value or (die == 1 and value != 1):  # Pasari counts as any value, except when bidding on 1s
                     total_count += 1
 
         # Pacao succeeds if actual count is greater than or equal to bid
@@ -258,6 +258,12 @@ class GameState:
         ):
             self.current_player = (self.current_player + 1) % self.num_players
             attempts += 1
+        
+        # Check if game should be over after skipping players
+        # This ensures game_over is set correctly even if all but one player
+        # were eliminated by skipping rather than by losing dice
+        if not self.game_over:
+            self._check_game_over()
 
     def _check_game_over(self) -> None:
         """Check if game is over."""

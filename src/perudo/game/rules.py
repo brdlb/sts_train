@@ -57,7 +57,7 @@ class PerudoRules:
 
         # Check maximum quantity (cannot exceed total dice count)
         total_dice = sum(game_state.player_dice_count)
-        max_possible = total_dice * 2  # Considering pasari
+        max_possible = total_dice  # Considering pasari
         if quantity > max_possible:
             return False, f"Quantity cannot exceed {max_possible}"
 
@@ -226,14 +226,14 @@ class PerudoRules:
         if game_state.current_bid is None:
             # First bid - can be any
             min_quantity = 1
-            max_quantity = sum(game_state.player_dice_count) * 2  # Considering pasari
+            max_quantity = sum(game_state.player_dice_count)  # Considering pasari
             for q in range(min_quantity, min(max_quantity + 1, 30)):  # Limit to reasonable maximum
                 for v in range(1, game_state.total_dice_values + 1):
                     actions.append(("bid", q, v))
         else:
             # Subsequent bids must be higher
             prev_quantity, prev_value = game_state.current_bid
-            max_quantity = sum(game_state.player_dice_count) * 2
+            max_quantity = sum(game_state.player_dice_count)
             for q in range(prev_quantity, min(max_quantity + 1, 30)):
                 for v in range(1, game_state.total_dice_values + 1):
                     if game_state._is_bid_higher(q, v, prev_quantity, prev_value):

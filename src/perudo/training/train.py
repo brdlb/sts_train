@@ -3,8 +3,9 @@ Main script for training Perudo agents with parameter sharing and self-play.
 """
 
 import os
-import time
 import threading
+import contextlib
+from io import StringIO
 import numpy as np
 from typing import List, Optional
 from stable_baselines3 import PPO
@@ -99,59 +100,20 @@ class SelfPlayTrainingCallback(BaseCallback):
         opponent_pool: OpponentPool,
         snapshot_freq: int = 50000,
         verbose: int = 0,
-        print_freq: int = 1000,
-        print_interval_seconds: float = 10.0,
         debug: bool = False
     ):
         super().__init__(verbose)
         self.opponent_pool = opponent_pool
         self.snapshot_freq = snapshot_freq
-        self.print_freq = print_freq
-        self.print_interval_seconds = print_interval_seconds
         self.debug = debug
         self.current_step = 0
         self.vec_env = None
-        # Буферы для realtime-статистики
+        # Буферы для статистики
         self.episode_rewards = []
         self.episode_lengths = []
         self.episode_wins = []
         # Для потокобезопасного доступа
         self._lock = threading.Lock()
-        # Флаг для остановки потока вывода статистики
-        self._stop_print_thread = False
-        self._print_thread = None
-        # Счетчики вызовов для отладки
-        self._on_step_calls = 0
-        self._on_rollout_end_calls = 0
-        self._last_step_time = None
-
-    def _print_statistics_loop(self):
-        """Фоновый поток для периодического вывода статистики."""
-        while not self._stop_print_thread:
-            time.sleep(self.print_interval_seconds)
-            if self._stop_print_thread:
-                break
-            
-            with self._lock:
-                if len(self.episode_rewards) > 0:
-                    avg_reward = np.mean(self.episode_rewards[-100:])
-                    avg_length = np.mean(self.episode_lengths[-100:])
-                    win_rate = 100 * np.mean(self.episode_wins[-100:]) if self.episode_wins else 0
-                else:
-                    avg_reward = 0
-                    avg_length = 0
-                    win_rate = 0
-            
-            print(f"[Step {self.current_step}] AvgReward(100): {avg_reward:.2f}, "
-                  f"AvgLen(100): {avg_length:.1f}, WinRate(100): {win_rate:.1f}%, "
-                  f"Completed episodes: {len(self.episode_rewards)}")
-            
-            if self.debug:
-                print(f"[DEBUG] _on_step called: {self._on_step_calls} times, "
-                      f"_on_rollout_end called: {self._on_rollout_end_calls} times")
-                if self._last_step_time:
-                    elapsed = time.time() - self._last_step_time
-                    print(f"[DEBUG] Time since last _on_step: {elapsed:.2f}s")
 
     def _on_training_start(self) -> None:
         if hasattr(self.model, 'env'):
@@ -162,56 +124,12 @@ class SelfPlayTrainingCallback(BaseCallback):
             self._underlying_env = self.vec_env.envs[0] if hasattr(self.vec_env.envs, '__getitem__') else None
         else:
             self._underlying_env = None
-        
-        print(f"[DEBUG] Training started. Print interval: {self.print_interval_seconds}s")
-        
-        # Log model and env info
-        if self.debug:
-            print(f"[DEBUG] Model type: {type(self.model)}")
-            print(f"[DEBUG] Env type: {type(self.vec_env)}")
-            if hasattr(self.model, 'n_steps'):
-                print(f"[DEBUG] Model n_steps: {self.model.n_steps}")
-            if hasattr(self.vec_env, 'num_envs'):
-                print(f"[DEBUG] VecEnv num_envs: {self.vec_env.num_envs}")
-            
-            # Important: Calculate expected callback frequency
-            if hasattr(self.model, 'n_steps') and hasattr(self.vec_env, 'num_envs'):
-                steps_per_rollout = self.model.n_steps * self.vec_env.num_envs
-                print(f"[DEBUG] Steps per rollout: {steps_per_rollout}")
-                print(f"[DEBUG] _on_step will be called once per {steps_per_rollout} environment steps")
-                print(f"[DEBUG] _on_rollout_end will be called once per {steps_per_rollout} environment steps")
-                print(f"[DEBUG] If episodes take ~50 steps, expect _on_step/_on_rollout_end every ~{steps_per_rollout // 50} episodes")
-        
-        # Запускаем фоновый поток для периодического вывода статистики
-        self._stop_print_thread = False
-        self._print_thread = threading.Thread(target=self._print_statistics_loop, daemon=True)
-        self._print_thread.start()
-        print(f"[DEBUG] Statistics print thread started")
     
     def _on_training_end(self) -> None:
-        """Останавливаем поток вывода статистики при завершении тренировки."""
-        self._stop_print_thread = True
-        if self._print_thread and self._print_thread.is_alive():
-            self._print_thread.join(timeout=1.0)
-        print(f"[DEBUG] Training ended. Total _on_step calls: {self._on_step_calls}, "
-              f"Total _on_rollout_end calls: {self._on_rollout_end_calls}")
+        """Called when training ends."""
+        pass
     
     def _on_step(self) -> bool:
-        self._on_step_calls += 1
-        step_time = time.time()
-        
-        if self.debug:
-            if self._on_step_calls == 1:
-                print(f"[DEBUG] First _on_step called at {time.strftime('%H:%M:%S')}")
-                print(f"[DEBUG] This callback is called after each rollout collection (n_steps * num_envs steps)")
-            
-            # Log every step for first 10 calls, then every 100th
-            if self._on_step_calls <= 10 or self._on_step_calls % 100 == 0:
-                elapsed = step_time - self._last_step_time if self._last_step_time else 0
-                print(f"[DEBUG] _on_step #{self._on_step_calls} called at {time.strftime('%H:%M:%S')}, "
-                      f"elapsed since last: {elapsed:.2f}s")
-        
-        self._last_step_time = step_time
         self.current_step += 1
         
         # Собираем episode_info из infos всех env (SB3 их передаёт в self.locals["infos"])
@@ -256,28 +174,7 @@ class SelfPlayTrainingCallback(BaseCallback):
         return True
     
     def _on_rollout_end(self) -> bool:
-        self._on_rollout_end_calls += 1
-        rollout_end_time = time.time()
-        
-        if self.debug:
-            if self._on_rollout_end_calls == 1:
-                print(f"[DEBUG] First _on_rollout_end called at {time.strftime('%H:%M:%S')}")
-            
-            # Log every 10th rollout end for visibility
-            if self._on_rollout_end_calls % 10 == 0:
-                elapsed = rollout_end_time - self._last_step_time if self._last_step_time else 0
-                print(f"[DEBUG] _on_rollout_end called {self._on_rollout_end_calls} times. "
-                      f"Current step: {self.current_step}, "
-                      f"Time since last _on_step: {elapsed:.2f}s")
-        
-        # Check rollout buffer info
-        if self.debug and hasattr(self.model, 'rollout_buffer'):
-            buffer = self.model.rollout_buffer
-            if buffer is not None and hasattr(buffer, 'size'):
-                print(f"[DEBUG] Rollout buffer size: {buffer.size}, "
-                      f"pos: {getattr(buffer, 'pos', 'N/A')}")
-        
-        # Winrate statistics are updated in VecEnv.step_wait() when episodes end, so we don't need to do anything here
+        # Winrate statistics are updated in VecEnv.step_wait() when episodes end
         return True
 
 
@@ -301,7 +198,7 @@ class SelfPlayTraining:
         """
         self.config = config
         self.num_players = config.game.num_players
-        self.num_envs = getattr(config.training, 'num_envs', 8)
+        self.num_envs = 8
         
         # Create directories
         os.makedirs(config.training.log_dir, exist_ok=True)
@@ -348,6 +245,7 @@ class SelfPlayTraining:
             policy=config.training.policy,
             env=self.vec_env,
             device=device,
+            policy_kwargs=config.training.policy_kwargs,
             learning_rate=config.training.learning_rate,
             n_steps=config.training.n_steps,
             batch_size=config.training.batch_size,
@@ -400,8 +298,7 @@ class SelfPlayTraining:
             opponent_pool=self.opponent_pool,
             snapshot_freq=50000,
             verbose=self.config.training.verbose,
-            print_interval_seconds=10.0,
-            debug=True  # Enable debug output to track callback calls
+            debug=False
         )
         callbacks.append(selfplay_callback)
         
@@ -416,20 +313,12 @@ class SelfPlayTraining:
         # Train model
         tb_log_name = self.config.training.tb_log_name or "perudo_training"
         
-        print(f"[DEBUG] About to start model.learn()")
-        print(f"[DEBUG] n_steps={self.config.training.n_steps}, num_envs={self.num_envs}")
-        print(f"[DEBUG] Steps per rollout = {self.config.training.n_steps * self.num_envs}")
-        print(f"[DEBUG] This means _on_step will be called approximately every {self.config.training.n_steps * self.num_envs} environment steps")
-        
-        start_time = time.time()
         self.model.learn(
             total_timesteps=self.config.training.total_timesteps,
             tb_log_name=tb_log_name,
             callback=callbacks,
             progress_bar=True,  # Enable progress bar for better visibility
         )
-        elapsed_time = time.time() - start_time
-        print(f"[DEBUG] model.learn() completed in {elapsed_time:.2f}s")
         
         print("Training completed!")
         
@@ -450,7 +339,9 @@ class SelfPlayTraining:
         
     def load_model(self, path: str):
         """Load a model."""
-        self.model = PPO.load(path, env=self.vec_env)
+        # Suppress SB3 wrapping messages
+        with contextlib.redirect_stdout(StringIO()):
+            self.model = PPO.load(path, env=self.vec_env)
         self.vec_env.current_model = self.model
 
 
@@ -480,7 +371,7 @@ def main():
     parser.add_argument(
         "--total-timesteps",
         type=int,
-        default=1_000_000,
+        default=10_000_000,
         help="Total training steps",
     )
     parser.add_argument(

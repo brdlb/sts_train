@@ -4,6 +4,9 @@ Opponent pool management for self-play training.
 
 import os
 import json
+import sys
+import contextlib
+from io import StringIO
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
@@ -217,7 +220,17 @@ class OpponentPool:
         snapshot.winrate = snapshot.wins / snapshot.games_played
 
         # Update ELO
-        expected_score = 1.0 / (1.0 + 10 ** ((snapshot.elo - current_elo) / 400.0))
+        # Use stable formula to avoid overflow
+        elo_diff = (snapshot.elo - current_elo) / 400.0
+        # Clamp elo_diff to prevent overflow in 10 ** elo_diff
+        # For very large differences, expected_score approaches 0 or 1
+        if elo_diff > 10.0:  # Very large difference, snapshot is much stronger
+            expected_score = 0.0
+        elif elo_diff < -10.0:  # Very large difference, current is much stronger
+            expected_score = 1.0
+        else:
+            expected_score = 1.0 / (1.0 + 10 ** elo_diff)
+        
         actual_score = 1.0 if won else 0.0
         elo_change = self.elo_k * (actual_score - expected_score)
         snapshot.elo += elo_change
@@ -298,7 +311,9 @@ class OpponentPool:
             return None
 
         try:
-            model = PPO.load(snapshot_path, env=env)
+            # Suppress SB3 wrapping messages
+            with contextlib.redirect_stdout(StringIO()):
+                model = PPO.load(snapshot_path, env=env)
             return model
         except Exception as e:
             print(f"Error loading snapshot {snapshot_path}: {e}")
