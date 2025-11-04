@@ -41,7 +41,9 @@ class GameState:
 
         # Game modes
         self.palifico_active: List[bool] = [False] * num_players  # Palifico active for player
-        self.special_round_active: bool = False  # Special round active when any player has 1 die
+        self.special_round_active: bool = False  # Special round active when declared by player with 1 die
+        self.special_round_declared_by: Optional[int] = None  # Player who declared special round
+        self.special_round_used: List[bool] = [False] * num_players  # Track if player has used special round
         self.pacao_called: bool = False  # Whether pacao was called
 
         # Game status
@@ -60,6 +62,8 @@ class GameState:
         self.player_dice_count = [self.dice_per_player] * self.num_players
         self.palifico_active = [False] * self.num_players
         self.special_round_active = False
+        self.special_round_declared_by = None
+        self.special_round_used = [False] * self.num_players
         self.pacao_called = False
         self.game_over = False
         self.winner = None
@@ -72,8 +76,9 @@ class GameState:
         self.player_dice = []
         # Reset palifico status at the start of each round
         self.palifico_active = [count == 1 for count in self.player_dice_count]
-        # Special round is active when any player has 1 die
-        self.special_round_active = any(count == 1 for count in self.player_dice_count)
+        # Special round is NOT automatically activated - it must be declared
+        # Reset special round at start of each round (unless continuing declared round)
+        # (Special round persists until round ends)
         for player_id in range(self.num_players):
             dice = np.random.randint(1, self.total_dice_values + 1, size=self.player_dice_count[player_id]).tolist()
             self.player_dice.append(dice)
@@ -236,13 +241,13 @@ class GameState:
 
     def call_pacao(self, caller_id: int) -> Tuple[bool, int]:
         """
-        Call pacao - all players show their dice.
+        Call pacao (believe) - all players show their dice.
 
         Args:
             caller_id: ID of player calling pacao
 
         Returns:
-            Tuple (whether pacao succeeded, actual dice count)
+            Tuple (whether dice count exactly equals bid, actual dice count)
         """
         if self.current_bid is None:
             return False, 0
@@ -252,8 +257,8 @@ class GameState:
         # Count all dice (respecting special round rules)
         total_count = self._count_dice_for_value(value)
 
-        # Pacao succeeds if actual count is greater than or equal to bid
-        pacao_success = total_count >= quantity
+        # Pacao succeeds if actual count exactly equals bid
+        pacao_success = total_count == quantity
 
         self.pacao_called = True
         return pacao_success, total_count
@@ -274,6 +279,47 @@ class GameState:
             # Check game over
             if self.player_dice_count[player_id] == 0:
                 self._check_game_over()
+
+    def gain_dice(self, player_id: int, count: int = 1) -> None:
+        """
+        Player gains dice (max 5).
+
+        Args:
+            player_id: Player ID
+            count: Number of dice to gain
+        """
+        if 0 <= player_id < self.num_players:
+            self.player_dice_count[player_id] = min(
+                self.dice_per_player, self.player_dice_count[player_id] + count
+            )
+
+    def declare_special_round(self, player_id: int) -> bool:
+        """
+        Declare special round (can only be done once by player with 1 die, must have > 2 active players).
+
+        Args:
+            player_id: Player ID declaring special round
+
+        Returns:
+            True if special round was successfully declared
+        """
+        # Check conditions
+        if self.player_dice_count[player_id] != 1:
+            return False  # Must have exactly 1 die
+        
+        if self.special_round_used[player_id]:
+            return False  # Can only be declared once
+        
+        # Count active players (players with dice)
+        active_players = sum(1 for count in self.player_dice_count if count > 0)
+        if active_players <= 2:
+            return False  # Must have more than 2 active players
+        
+        # Declare special round
+        self.special_round_active = True
+        self.special_round_declared_by = player_id
+        self.special_round_used[player_id] = True
+        return True
 
     def next_player(self) -> None:
         """Move to next player."""

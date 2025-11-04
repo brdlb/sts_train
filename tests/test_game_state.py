@@ -112,7 +112,7 @@ def test_game_over():
 
 
 def test_special_round_detection():
-    """Test special round detection."""
+    """Test special round declaration."""
     game_state = GameState(num_players=3, dice_per_player=5)
     
     # Initially no special round
@@ -122,24 +122,25 @@ def test_special_round_detection():
     game_state.player_dice_count[0] = 1
     game_state.roll_dice()
     
-    # Special round should be active
-    assert game_state.special_round_active
+    # Special round is NOT automatically active - must be declared
+    assert not game_state.special_round_active
     
-    # Set all players to 1 die
+    # Declare special round
+    assert game_state.declare_special_round(0)
+    assert game_state.special_round_active
+    assert game_state.special_round_declared_by == 0
+    
+    # Special round persists until round ends
     game_state.player_dice_count[1] = 1
-    game_state.player_dice_count[2] = 1
+    game_state.roll_dice()
+    assert game_state.special_round_active  # Still active
+    
+    # Reset special round (simulating round end)
+    game_state.special_round_active = False
+    game_state.special_round_declared_by = None
     game_state.roll_dice()
     
-    # Special round should still be active
-    assert game_state.special_round_active
-    
-    # Set all players back to 5 dice
-    game_state.player_dice_count[0] = 5
-    game_state.player_dice_count[1] = 5
-    game_state.player_dice_count[2] = 5
-    game_state.roll_dice()
-    
-    # Special round should not be active
+    # Special round should not be active after reset
     assert not game_state.special_round_active
 
 

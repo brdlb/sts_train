@@ -175,25 +175,6 @@ effective_batch_size = n_steps × num_envs × num_players
 
 Advantages нормализуются глобально по всему батчу перед обновлением модели.
 
-## Observation Space
-
-Observation включает:
-
-1. **Agent ID** (one-hot, num_players значений) - идентификатор агента
-2. **Current Bid** (2 значения: quantity, value) - текущая ставка
-3. **Bid History** (history_length × 3 значения) - история ставок
-4. **Dice Count** (num_players значений) - количество костей у каждого игрока
-5. **Current Player** (1 значение) - текущий игрок
-6. **Palifico Flags** (num_players значений) - флаги пальфико
-7. **Pacao Flag** (1 значение) - флаг пакао
-8. **Player Dice** (5 значений) - кости текущего игрока
-
-## Action Space
-
-- **0**: Challenge (вызов предыдущего игрока)
-- **1**: Pacao (все показывают кости)
-- **2+**: Bids (закодированные ставки: quantity, value)
-
 ## Правила игры Perudo
 
 Perudo - это игра в кости с элементами блефа и неполной информацией. 

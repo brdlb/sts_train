@@ -208,34 +208,34 @@ def calculate_reward(
     """
     reward = 0.0
 
-    # Reward for winning game
+    # Reward for winning game (increased from 100.0 to 250.0)
     if game_over and winner == player_id:
-        reward += 100.0
+        reward += 250.0
 
-    # Penalty for losing dice
+    # Penalty for losing dice (reduced from -10.0 to -6.0 per die)
     if dice_lost > 0:
-        reward -= 10.0 * dice_lost
+        reward -= 6.0 * dice_lost
 
-    # Intermediate rewards for bluffs and challenges
-    # +0.5 for successful bluff or catching someone else's bluff
-    # -0.5 for unsuccessful bet or challenge that led to losing a die
+    # Intermediate rewards for bluffs and challenges (scaled up)
+    # +2.0 for successful challenge/pacao (increased from +0.5)
+    # -2.0 for unsuccessful challenge/pacao that led to losing a die (increased from -0.5)
     if action_type == "challenge" and challenge_success is not None:
         if challenge_success:
             # Successfully caught someone's bluff
-            reward += 0.5
+            reward += 2.0
         else:
             # Unsuccessful challenge that led to dice loss
             if dice_lost > 0:
-                reward -= 0.5
+                reward -= 2.0
 
     if action_type == "pacao" and pacao_success is not None:
         if pacao_success:
             # Successfully called pacao (caught someone's bluff)
-            reward += 0.5
+            reward += 2.0
         else:
             # Unsuccessful pacao that led to dice loss
             if dice_lost > 0:
-                reward -= 0.5
+                reward -= 2.0
 
     # Note: Successful bluff detection (bid that was never challenged) 
     # is handled separately in the environment when round ends

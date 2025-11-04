@@ -76,7 +76,8 @@ class PerudoEnv(gym.Env):
         Initialize Perudo environment.
 
         Args:
-            num_players: Number of players
+            num_players: Maximum number of players (used for observation space)
+                        Actual number of players will be randomly selected (3-8) in reset()
             dice_per_player: Number of dice per player
             total_dice_values: Total possible dice values (usually 6)
             max_quantity: Maximum dice quantity in bid
@@ -85,31 +86,34 @@ class PerudoEnv(gym.Env):
         """
         super().__init__()
 
-        self.num_players = num_players
+        # Use maximum number of players (8) for observation space
+        # Actual number of players will be randomly selected in reset()
+        self.max_num_players = max(8, num_players)  # At least 8 for random selection
+        self.num_players = num_players  # Will be updated in reset()
         self.dice_per_player = dice_per_player
         self.total_dice_values = total_dice_values
         self.max_quantity = max_quantity
         self.history_length = history_length
         self.render_mode = render_mode
 
-        # Create game state
+        # Create game state with initial num_players (will be recreated in reset())
         self.game_state = GameState(
             num_players=num_players,
             dice_per_player=dice_per_player,
             total_dice_values=total_dice_values,
         )
 
-        # Define observation space
-        # Format: [agent_id(num_players), current_bid(2), history(history_length*3), 
-        #          dice_count(num_players), current_player(1), palifico(num_players), 
+        # Define observation space with maximum number of players
+        # Format: [agent_id(max_num_players), current_bid(2), history(history_length*3), 
+        #          dice_count(max_num_players), current_player(1), palifico(max_num_players), 
         #          pacao(1), player_dice(5)]
         obs_size = (
-            num_players  # agent_id one-hot
+            self.max_num_players  # agent_id one-hot
             + 2  # current_bid
             + history_length * 3  # history
-            + num_players  # dice_count
+            + self.max_num_players  # dice_count
             + 1  # current_player
-            + num_players  # palifico
+            + self.max_num_players  # palifico
             + 1  # pacao
             + 5  # player_dice
         )
@@ -140,12 +144,18 @@ class PerudoEnv(gym.Env):
         self.agent_bid_this_round = False
         # Deferred reward for agent (e.g., when opponent challenges agent's bid and fails)
         self.agent_deferred_reward = 0.0
+        
+        # Episode statistics for monitoring
+        self.episode_bid_count = 0  # Total number of bids made in episode
+        self.episode_challenge_count = 0  # Total number of challenges made in episode
+        self.episode_believe_count = 0  # Total number of pacao/believe calls made in episode
 
     def reset(
         self, seed: Optional[int] = None, options: Optional[Dict] = None
     ) -> Tuple[np.ndarray, Dict]:
         """
         Reset environment to initial state.
+        Randomly selects number of players (3-8) at the start of each episode.
 
         Args:
             seed: Random seed
@@ -156,8 +166,15 @@ class PerudoEnv(gym.Env):
         """
         super().reset(seed=seed)
 
-        # Reset game state
-        self.game_state.reset()
+        # Randomly select number of players (3-8) for this episode
+        self.num_players = np.random.randint(3, 9)  # 3 to 8 inclusive
+
+        # Recreate game state with new number of players
+        self.game_state = GameState(
+            num_players=self.num_players,
+            dice_per_player=self.dice_per_player,
+            total_dice_values=self.total_dice_values,
+        )
 
         # Set active player
         self.active_player_id = self.game_state.current_player
@@ -167,6 +184,7 @@ class PerudoEnv(gym.Env):
 
         info = {
             "player_id": self.active_player_id,
+            "num_players": self.num_players,
             "game_state": self.game_state.get_public_info(),
         }
 
@@ -177,6 +195,11 @@ class PerudoEnv(gym.Env):
         self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
         self.agent_bid_this_round = False
         self.agent_deferred_reward = 0.0
+        
+        # Reset episode statistics
+        self.episode_bid_count = 0
+        self.episode_challenge_count = 0
+        self.episode_believe_count = 0
 
         return observation, info
 
@@ -199,12 +222,17 @@ class PerudoEnv(gym.Env):
                 # Episode stats not saved yet, save current accumulated values
                 self.last_episode_reward = self.episode_reward
                 self.last_episode_length = self.episode_length
+            winner = self.game_state.winner if hasattr(self.game_state, "winner") and self.game_state.winner is not None else -1
             info = {
                 "game_over": True,
                 "winner": self.game_state.winner,
                 "episode": {
                     "r": self.last_episode_reward,
                     "l": self.last_episode_length,
+                    "bid_count": self.episode_bid_count,
+                    "challenge_count": self.episode_challenge_count,
+                    "believe_count": self.episode_believe_count,
+                    "winner": winner,
                 },
                 "episode_reward": self.last_episode_reward,
                 "episode_length": self.last_episode_length,
@@ -241,6 +269,8 @@ class PerudoEnv(gym.Env):
                     # Track that agent made a bid this round
                     if self.active_player_id == 0:
                         self.agent_bid_this_round = True
+                    # Count bid action
+                    self.episode_bid_count += 1
                     self.game_state.next_player()
                     reward = calculate_reward(
                         "bid", False, -1, self.active_player_id, dice_lost=0
@@ -297,14 +327,13 @@ class PerudoEnv(gym.Env):
                 self.game_state.current_bid = None
                 self.game_state.pacao_called = False
 
-                # Restart round from new player
-                if loser_id == self.active_player_id:
-                    self.game_state.next_player()
-                else:
-                    self.game_state.current_player = (loser_id + 1) % self.num_players
-                    self.game_state.next_player()
+                # Restart round: next round starts with the player who lost the die
+                self.game_state.current_player = loser_id
 
                 # Roll dice again - round ends
+                # Reset special round at end of round
+                self.game_state.special_round_active = False
+                self.game_state.special_round_declared_by = None
                 self.game_state.roll_dice()
                 # Reset round tracking after dice roll
                 self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
@@ -318,15 +347,17 @@ class PerudoEnv(gym.Env):
                     challenge_success=challenge_success,
                     dice_lost=dice_lost if loser_id == self.active_player_id else 0,
                 )
+                # Count challenge action
+                self.episode_challenge_count += 1
                 # Add round reward
                 if self.active_player_id == 0:
                     reward += round_reward
                 # If agent successfully defended their bid (opponent challenged and failed),
                 # store deferred reward for agent (will be given on agent's next turn)
                 elif agent_defended_bid:
-                    # Agent gets +5.0 reward for successfully defending their risky bid
+                    # Agent gets +2.5 reward for successfully defending their risky bid (reduced from +5.0)
                     # This reward will be added when agent makes their next action
-                    self.agent_deferred_reward += 5.0
+                    self.agent_deferred_reward += 2.5
                 action_valid = True
             else:
                 # Invalid challenge - penalty
@@ -344,7 +375,7 @@ class PerudoEnv(gym.Env):
                     )
 
         elif action_type == "pacao":
-            # Call pacao
+            # Call pacao (believe)
             can_pacao, error_msg = PerudoRules.can_call_pacao(
                 self.game_state, self.active_player_id
             )
@@ -353,13 +384,32 @@ class PerudoEnv(gym.Env):
                     self.active_player_id
                 )
                 bid_quantity = self.game_state.current_bid[0] if self.game_state.current_bid else 0
-                loser_id, dice_lost = PerudoRules.process_pacao_result(
+                loser_id, dice_lost, next_round_starter = PerudoRules.process_pacao_result(
                     self.game_state,
                     self.active_player_id,
                     pacao_success,
                     actual_count,
                     bid_quantity,
                 )
+                
+                # Handle pacao result according to new rules
+                player_who_changed_dice = None  # Track who gained or lost a die
+                if pacao_success:
+                    # Dice exactly equals bid: believer benefits
+                    if self.game_state.player_dice_count[self.active_player_id] < self.game_state.dice_per_player:
+                        # Gain a die
+                        self.game_state.gain_dice(self.active_player_id, 1)
+                        dice_lost = 0
+                        player_who_changed_dice = self.active_player_id
+                    elif next_round_starter is not None:
+                        # Believer has 5 dice and starts next round
+                        dice_lost = 0
+                        player_who_changed_dice = next_round_starter
+                else:
+                    # Dice doesn't equal bid: believer loses die
+                    # Don't lose dice here - it will be handled by process_pacao_result
+                    dice_lost = 1
+                    player_who_changed_dice = self.active_player_id
                 
                 # Check if agent (player 0) made the bid and successfully defended it
                 # (opponent called pacao and failed)
@@ -370,24 +420,34 @@ class PerudoEnv(gym.Env):
                     # Agent made the bid, pacao failed (opponent was wrong), agent didn't lose dice
                     if (bid_maker_id == agent_id and 
                         not pacao_success and 
-                        loser_id != agent_id):
+                        loser_id == self.active_player_id):
                         agent_defended_bid = True
                 
                 # Check round reward BEFORE losing dice
                 # Pass action_type to avoid double penalty (pacao already penalized in calculate_reward)
-                round_reward = self._check_round_end_reward(loser_id, dice_lost, action_type="pacao")
-                self.game_state.lose_dice(loser_id, dice_lost)
+                round_reward = self._check_round_end_reward(loser_id if loser_id is not None else -1, dice_lost, action_type="pacao")
+                if loser_id is not None:
+                    self.game_state.lose_dice(loser_id, dice_lost)
                 self.game_state.current_bid = None
                 self.game_state.pacao_called = False
 
-                # Restart round
-                if loser_id == self.active_player_id:
-                    self.game_state.next_player()
+                # Restart round: next round starts with the player who gained or lost a die
+                if player_who_changed_dice is not None:
+                    self.game_state.current_player = player_who_changed_dice
+                elif next_round_starter is not None:
+                    # Believer with 5 dice starts next round
+                    self.game_state.current_player = next_round_starter
+                elif loser_id is not None:
+                    # Fallback: if no one gained dice but someone lost, that player starts
+                    self.game_state.current_player = loser_id
                 else:
-                    self.game_state.current_player = (loser_id + 1) % self.num_players
+                    # Fallback: continue normally
                     self.game_state.next_player()
 
                 # Roll dice again - round ends
+                # Reset special round at end of round
+                self.game_state.special_round_active = False
+                self.game_state.special_round_declared_by = None
                 self.game_state.roll_dice()
                 # Reset round tracking after dice roll
                 self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
@@ -399,8 +459,10 @@ class PerudoEnv(gym.Env):
                     self.game_state.winner or -1,
                     self.active_player_id,
                     pacao_success=pacao_success,
-                    dice_lost=dice_lost if loser_id == self.active_player_id else 0,
+                    dice_lost=dice_lost if (loser_id is not None and loser_id == self.active_player_id) else 0,
                 )
+                # Count believe (pacao) action
+                self.episode_believe_count += 1
                 # Add round reward
                 if self.active_player_id == 0:
                     reward += round_reward
@@ -448,6 +510,11 @@ class PerudoEnv(gym.Env):
             if self.agent_deferred_reward != 0.0:
                 reward += self.agent_deferred_reward
                 self.agent_deferred_reward = 0.0
+            
+            # Add dice advantage reward (optional enhancement)
+            dice_advantage_reward = self._calculate_dice_advantage_reward()
+            reward += dice_advantage_reward
+            
             self.episode_reward += reward
             self.episode_length += 1
 
@@ -482,9 +549,14 @@ class PerudoEnv(gym.Env):
             self.last_episode_reward = self.episode_reward
             self.last_episode_length = self.episode_length
             # VecMonitor expects "episode" key with "r" (reward) and "l" (length) subkeys
+            # Additional statistics: bid_count, challenge_count, believe_count, winner
             info["episode"] = {
                 "r": self.last_episode_reward,
                 "l": self.last_episode_length,
+                "bid_count": self.episode_bid_count,
+                "challenge_count": self.episode_challenge_count,
+                "believe_count": self.episode_believe_count,
+                "winner": self.game_state.winner if hasattr(self.game_state, "winner") and self.game_state.winner is not None else -1,
             }
             # Also keep old format for backward compatibility with custom callbacks
             info["episode_reward"] = self.last_episode_reward
@@ -515,9 +587,9 @@ class PerudoEnv(gym.Env):
             pacao_called=self.game_state.pacao_called,
             player_dice=player_dice,
             history_length=self.history_length,
-            max_players=self.num_players,
+            max_players=self.max_num_players,  # Use max for observation space
             agent_id=player_id,
-            num_agents=self.num_players,
+            num_agents=self.max_num_players,  # Use max for observation space
         )
 
         return observation
@@ -574,8 +646,8 @@ class PerudoEnv(gym.Env):
                         Used to avoid double penalty when agent's challenge/pacao fails
 
         Returns:
-            Round reward (0.1 if agent didn't lose dice, 0 otherwise)
-            Also handles -0.5 for unsuccessful bid that led to dice loss
+            Round reward (+0.5 if agent didn't lose dice, 0 otherwise)
+            Also handles -1.5 for unsuccessful bid that led to dice loss
         """
         reward = 0.0
         agent_id = 0
@@ -583,7 +655,7 @@ class PerudoEnv(gym.Env):
         # Check if agent (player 0) lost dice in this round
         agent_lost_dice = (loser_id == agent_id and dice_lost > 0)
 
-        # -0.5 for unsuccessful bid that led to dice loss
+        # -1.5 for unsuccessful bid that led to dice loss (increased from -0.5)
         # (agent made a bid that was successfully challenged by opponent)
         # Only apply if the current action is NOT agent's challenge/pacao
         # (because those are already penalized in calculate_reward)
@@ -592,15 +664,45 @@ class PerudoEnv(gym.Env):
             is_agent_action = (action_type in ["challenge", "pacao"] and self.active_player_id == agent_id)
             if not is_agent_action:
                 # Agent's bid was successfully challenged by opponent
-                reward -= 0.5
+                reward -= 1.5
 
-        # +0.1 reward for each round in which the agent did not lose a die
+        # +0.5 reward for each round in which the agent did not lose a die (increased from +0.1)
         if not agent_lost_dice:
-            reward += 0.1
+            reward += 0.5
             
-            # +0.5 for successful bluff (agent made a bid that wasn't successfully challenged)
             if self.agent_bid_this_round:
                 # Agent successfully bluffed (bid was correct or never challenged)
-                reward += 0.5
+                # Increased from +0.5 to +1.5
+                reward += 1.5
 
         return reward
+
+    def _calculate_dice_advantage_reward(self) -> float:
+        """
+        Calculate reward for having more dice than average opponents.
+        
+        Returns:
+            Reward based on dice advantage (+0.2 per die advantage)
+        """
+        agent_id = 0
+        if agent_id >= len(self.game_state.player_dice_count):
+            return 0.0
+        
+        agent_dice = self.game_state.player_dice_count[agent_id]
+        
+        # Calculate average dice count for opponents (excluding agent)
+        opponent_dice_counts = [
+            count for i, count in enumerate(self.game_state.player_dice_count)
+            if i != agent_id and i < self.num_players
+        ]
+        
+        if not opponent_dice_counts:
+            return 0.0
+        
+        avg_opponent_dice = sum(opponent_dice_counts) / len(opponent_dice_counts)
+        dice_advantage = agent_dice - avg_opponent_dice
+        
+        # Reward: +0.2 per die advantage (capped at reasonable maximum)
+        if dice_advantage > 0:
+            return 0.2 * min(dice_advantage, 5.0)  # Cap at 5 dice advantage
+        return 0.0

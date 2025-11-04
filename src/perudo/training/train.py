@@ -3,6 +3,8 @@ Main script for training Perudo agents with parameter sharing and self-play.
 """
 
 import os
+import re
+import glob
 import threading
 import contextlib
 from io import StringIO
@@ -49,6 +51,64 @@ def get_device(device: Optional[str] = None) -> str:
         print("CUDA not available, using CPU")
     
     return device
+
+
+def find_latest_model(model_dir: str) -> Optional[str]:
+    """
+    Find the latest saved model in the model directory.
+    
+    Looks for models with pattern:
+    - perudo_model_<steps>_steps.zip (checkpoint models)
+    - perudo_model_final.zip (final model, treated as highest priority)
+    
+    Args:
+        model_dir: Directory to search for models
+    
+    Returns:
+        Path to the latest model, or None if no models found
+    """
+    if not os.path.exists(model_dir):
+        return None
+    
+    # Find all checkpoint models (perudo_model_<steps>_steps.zip)
+    checkpoint_pattern = os.path.join(model_dir, "perudo_model_*_steps.zip")
+    checkpoint_files = glob.glob(checkpoint_pattern)
+    
+    # Find final model
+    final_model_path = os.path.join(model_dir, "perudo_model_final.zip")
+    final_model_exists = os.path.exists(final_model_path)
+    
+    latest_model = None
+    latest_steps = -1
+    
+    # Extract steps from checkpoint files
+    pattern = re.compile(r"perudo_model_(\d+)_steps\.zip")
+    for file_path in checkpoint_files:
+        match = pattern.search(os.path.basename(file_path))
+        if match:
+            steps = int(match.group(1))
+            if steps > latest_steps:
+                latest_steps = steps
+                latest_model = file_path
+    
+    # If final model exists, prefer it over checkpoints
+    if final_model_exists:
+        # But if we have checkpoints with more steps, use the checkpoint
+        # (final model might be from an earlier run)
+        if latest_steps > 0:
+            # Compare modification times
+            final_mtime = os.path.getmtime(final_model_path)
+            latest_mtime = os.path.getmtime(latest_model) if latest_model else 0
+            
+            # Use the more recent file
+            if final_mtime > latest_mtime:
+                return final_model_path
+            else:
+                return latest_model
+        else:
+            return final_model_path
+    
+    return latest_model
 
 
 class AdvantageNormalizationCallback(BaseCallback):
@@ -238,26 +298,52 @@ class SelfPlayTraining:
         # Determine device for training (GPU with CPU fallback)
         device = get_device(config.training.device)
         
-        # Create PPO model with parameter sharing
-        # One model for all agents (agent_id is in observation)
-        # verbose=1 enables built-in progress bar showing timesteps and episode rewards
-        self.model = PPO(
-            policy=config.training.policy,
-            env=self.vec_env,
-            device=device,
-            policy_kwargs=config.training.policy_kwargs,
-            learning_rate=config.training.learning_rate,
-            n_steps=config.training.n_steps,
-            batch_size=config.training.batch_size,
-            n_epochs=config.training.n_epochs,
-            gamma=config.training.gamma,
-            gae_lambda=config.training.gae_lambda,
-            clip_range=config.training.clip_range,
-            ent_coef=config.training.ent_coef,
-            vf_coef=config.training.vf_coef,
-            max_grad_norm=config.training.max_grad_norm,
-            verbose=config.training.verbose,  # 1 = progress bar, 0 = no output
-        )
+        # Try to find and load the latest saved model
+        latest_model_path = find_latest_model(config.training.model_dir)
+        
+        if latest_model_path and os.path.exists(latest_model_path):
+            # Load existing model for continued training
+            print(f"Found existing model: {latest_model_path}")
+            print("Loading model for continued training...")
+            try:
+                # Suppress SB3 wrapping messages
+                with contextlib.redirect_stdout(StringIO()):
+                    self.model = PPO.load(latest_model_path, env=self.vec_env)
+                print(f"Successfully loaded model from {latest_model_path}")
+                
+                # Extract step count from filename if possible
+                match = re.search(r"perudo_model_(\d+)_steps\.zip", os.path.basename(latest_model_path))
+                if match:
+                    loaded_steps = int(match.group(1))
+                    print(f"Model was trained for {loaded_steps} steps. Continuing from step {loaded_steps}.")
+            except Exception as e:
+                print(f"Warning: Failed to load model from {latest_model_path}: {e}")
+                print("Creating new model instead...")
+                # Fall through to create new model
+                latest_model_path = None
+        
+        if latest_model_path is None or not os.path.exists(latest_model_path):
+            # Create new PPO model with parameter sharing
+            # One model for all agents (agent_id is in observation)
+            # verbose=1 enables built-in progress bar showing timesteps and episode rewards
+            print("Creating new model from scratch...")
+            self.model = PPO(
+                policy=config.training.policy,
+                env=self.vec_env,
+                device=device,
+                policy_kwargs=config.training.policy_kwargs,
+                learning_rate=config.training.learning_rate,
+                n_steps=config.training.n_steps,
+                batch_size=config.training.batch_size,
+                n_epochs=config.training.n_epochs,
+                gamma=config.training.gamma,
+                gae_lambda=config.training.gae_lambda,
+                clip_range=config.training.clip_range,
+                ent_coef=config.training.ent_coef,
+                vf_coef=config.training.vf_coef,
+                max_grad_norm=config.training.max_grad_norm,
+                verbose=config.training.verbose,  # 1 = progress bar, 0 = no output
+            )
         
         # Update opponent pool with current model
         # VecMonitor forwards attributes, but we also set it on raw env for safety

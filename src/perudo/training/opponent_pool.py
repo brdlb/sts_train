@@ -75,6 +75,10 @@ class OpponentPool:
 
         # Statistics file
         self.metadata_file = os.path.join(pool_dir, "pool_metadata.json")
+        
+        # Track current policy ELO rating
+        # Default to 1500 if not loaded from metadata
+        self.current_policy_elo: float = 1500.0
 
     def _load_metadata(self):
         """Load metadata about existing snapshots."""
@@ -83,8 +87,17 @@ class OpponentPool:
             try:
                 with open(metadata_file, "r") as f:
                     data = json.load(f)
+                    # Load current policy ELO if available
+                    if "current_policy_elo" in data:
+                        loaded_elo = float(data["current_policy_elo"])
+                        # Clamp to reasonable bounds
+                        self.current_policy_elo = max(0.0, min(3000.0, loaded_elo))
                     for snapshot_id, snapshot_data in data.get("snapshots", {}).items():
                         snapshot = OpponentSnapshot(**snapshot_data)
+                        # Fix invalid ELO values (clamp to reasonable bounds)
+                        if snapshot.elo < 0 or snapshot.elo > 3000:
+                            print(f"Warning: Fixing invalid ELO {snapshot.elo} for snapshot {snapshot_id} to valid range")
+                            snapshot.elo = max(0.0, min(3000.0, snapshot.elo))
                         # Check if file still exists
                         if os.path.exists(snapshot.path):
                             self.snapshots[snapshot_id] = snapshot
@@ -94,6 +107,7 @@ class OpponentPool:
     def _save_metadata(self):
         """Save metadata about snapshots."""
         data = {
+            "current_policy_elo": self.current_policy_elo,
             "snapshots": {
                 snapshot_id: asdict(snapshot)
                 for snapshot_id, snapshot in self.snapshots.items()
@@ -147,41 +161,76 @@ class OpponentPool:
         print(f"Saved snapshot: {snapshot_path} (step {step})")
         return snapshot_path
 
-    def sample_opponent(self, current_step: int) -> Optional[str]:
+    def sample_opponent(
+        self, current_step: int, snapshot_id: Optional[str] = None
+    ) -> Optional[str]:
         """
         Sample an opponent from the pool based on win rates.
 
         Args:
             current_step: Current training step
+            snapshot_id: Optional specific snapshot ID to use. If provided,
+                        returns that snapshot instead of sampling randomly.
 
         Returns:
-            Path to opponent snapshot, or None if pool is empty
+            Path to opponent snapshot, or None if pool is empty or snapshot not found
         """
         if not self.snapshots:
             return None
 
-        # Calculate weights based on win rates
-        # Lower win rate = higher weight (harder opponents)
+        # If specific snapshot is requested, return it directly
+        if snapshot_id is not None:
+            snapshot_path = self.get_snapshot_by_id(snapshot_id)
+            if snapshot_path:
+                # Update last used
+                self.snapshots[snapshot_id].last_used = current_step
+                return snapshot_path
+            else:
+                print(f"Warning: Snapshot ID '{snapshot_id}' not found, falling back to random sampling")
+                # Fall through to random sampling
+
+        # Calculate weights based on win rates, ELO, and game count
+        # Weighted selection prioritizes:
+        # 1. Lower winrate = harder opponent = higher weight
+        # 2. More games played = higher confidence = slightly higher weight
+        # 3. Higher ELO = stronger opponent = higher weight
         weights = []
         snapshots = []
         for snapshot_id, snapshot in self.snapshots.items():
-            # Use winrate to weight: lower winrate = more challenging = higher weight
-            # But we want to sample harder opponents more often
-            # So weight = 1 - winrate (inverted)
-            weight = 1.0 - snapshot.winrate
+            # Base weight from winrate: lower winrate = more challenging = higher weight
+            # Winrate is probability of current policy winning against this opponent
+            # Lower winrate means opponent is stronger, so we want to sample them more
+            winrate_weight = 1.0 - snapshot.winrate
+            
+            # Confidence weight: more games = more reliable winrate
+            # Use logarithmic scaling to avoid too much bias toward old snapshots
+            confidence_weight = np.log10(max(snapshot.games_played, 1) + 1) / np.log10(100)
+            confidence_weight = min(confidence_weight, 1.0)  # Cap at 1.0
+            
+            # ELO weight: higher ELO = stronger opponent = higher weight
+            # Normalize ELO to [0, 1] range (assuming ELO typically in 0-3000 range)
+            # Use 1500 as baseline (typical starting ELO)
+            elo_weight = (snapshot.elo - 1500.0) / 1500.0
+            elo_weight = max(0.0, min(1.0, elo_weight))  # Clamp to [0, 1]
+            
+            # Combine weights: winrate is primary, confidence and ELO are modifiers
+            # Formula: base_weight * (1 + confidence_bonus + elo_bonus)
+            combined_weight = winrate_weight * (1.0 + 0.2 * confidence_weight + 0.3 * elo_weight)
+            
             # Add small epsilon to avoid zero weights
-            weight = max(weight, 0.1)
+            weight = max(combined_weight, 0.1)
             weights.append(weight)
             snapshots.append((snapshot_id, snapshot))
 
-        # Normalize weights
+        # Normalize weights to probabilities
         total_weight = sum(weights)
-        if total_weight == 0:
-            weights = [1.0 / len(weights)] * len(weights)
+        if total_weight == 0 or len(weights) == 0:
+            # Fallback to uniform distribution if all weights are zero
+            weights = [1.0 / len(snapshots)] * len(snapshots)
         else:
             weights = [w / total_weight for w in weights]
 
-        # Sample based on weights
+        # Sample based on normalized weights
         selected_idx = np.random.choice(len(snapshots), p=weights, size=1)[0]
         snapshot_id, snapshot = snapshots[selected_idx]
 
@@ -191,15 +240,15 @@ class OpponentPool:
         return snapshot.path
 
     def update_winrate(
-        self, snapshot_path: str, won: bool, current_elo: float = 1500.0
+        self, snapshot_path: str, won: bool, current_elo: Optional[float] = None
     ):
         """
-        Update win rate statistics for a snapshot.
+        Update win rate statistics for a snapshot and ELO ratings for both players.
 
         Args:
             snapshot_path: Path to snapshot
             won: Whether current policy won
-            current_elo: Current policy ELO rating
+            current_elo: Current policy ELO rating (uses self.current_policy_elo if None)
         """
         # Find snapshot by path
         snapshot = None
@@ -211,6 +260,10 @@ class OpponentPool:
         if snapshot is None:
             return
 
+        # Use stored current policy ELO if not provided
+        if current_elo is None:
+            current_elo = self.current_policy_elo
+
         # Update statistics
         snapshot.games_played += 1
         if won:
@@ -219,21 +272,39 @@ class OpponentPool:
         # Update win rate
         snapshot.winrate = snapshot.wins / snapshot.games_played
 
-        # Update ELO
-        # Use stable formula to avoid overflow
+        # Update ELO ratings for both players
+        # ELO formula: Expected score = 1 / (1 + 10^((opponent_elo - my_elo) / 400))
+        # Calculate expected score for current policy (probability of winning)
         elo_diff = (snapshot.elo - current_elo) / 400.0
+        
         # Clamp elo_diff to prevent overflow in 10 ** elo_diff
         # For very large differences, expected_score approaches 0 or 1
         if elo_diff > 10.0:  # Very large difference, snapshot is much stronger
-            expected_score = 0.0
+            expected_score_current = 0.0
         elif elo_diff < -10.0:  # Very large difference, current is much stronger
-            expected_score = 1.0
+            expected_score_current = 1.0
         else:
-            expected_score = 1.0 / (1.0 + 10 ** elo_diff)
+            expected_score_current = 1.0 / (1.0 + 10 ** elo_diff)
         
-        actual_score = 1.0 if won else 0.0
-        elo_change = self.elo_k * (actual_score - expected_score)
-        snapshot.elo += elo_change
+        # Expected score for opponent is the complement
+        expected_score_opponent = 1.0 - expected_score_current
+        
+        # Actual scores
+        actual_score_current = 1.0 if won else 0.0
+        actual_score_opponent = 1.0 - actual_score_current
+        
+        # Calculate ELO changes
+        elo_change_current = self.elo_k * (actual_score_current - expected_score_current)
+        elo_change_opponent = self.elo_k * (actual_score_opponent - expected_score_opponent)
+        
+        # Update both ELO ratings
+        self.current_policy_elo += elo_change_current
+        snapshot.elo += elo_change_opponent
+        
+        # Clamp ELO to reasonable bounds to prevent extreme values
+        # Typical ELO ranges: 0-3000 (some systems use negative but it's unusual)
+        self.current_policy_elo = max(0.0, min(3000.0, self.current_policy_elo))
+        snapshot.elo = max(0.0, min(3000.0, snapshot.elo))
 
         # Save metadata
         self._save_metadata()
@@ -296,6 +367,55 @@ class OpponentPool:
         best_snapshot = max(self.snapshots.values(), key=lambda s: s.elo)
         return best_snapshot.path
 
+    def get_snapshot_by_id(self, snapshot_id: str) -> Optional[str]:
+        """
+        Get a snapshot path by its ID.
+
+        Args:
+            snapshot_id: ID of the snapshot (e.g., "snapshot_step_200000")
+
+        Returns:
+            Path to snapshot, or None if not found
+        """
+        if snapshot_id in self.snapshots:
+            return self.snapshots[snapshot_id].path
+        return None
+
+    def get_snapshot_by_step(self, step: int) -> Optional[str]:
+        """
+        Get a snapshot path by training step.
+
+        Args:
+            step: Training step number
+
+        Returns:
+            Path to snapshot, or None if not found
+        """
+        for snapshot in self.snapshots.values():
+            if snapshot.step == step:
+                return snapshot.path
+        return None
+
+    def list_snapshots(self) -> Dict[str, Dict]:
+        """
+        List all available snapshots with their metadata.
+
+        Returns:
+            Dictionary mapping snapshot_id to snapshot metadata
+        """
+        return {
+            snapshot_id: {
+                "path": snapshot.path,
+                "step": snapshot.step,
+                "winrate": snapshot.winrate,
+                "games_played": snapshot.games_played,
+                "wins": snapshot.wins,
+                "elo": snapshot.elo,
+                "last_used": snapshot.last_used,
+            }
+            for snapshot_id, snapshot in self.snapshots.items()
+        }
+
     def load_snapshot(self, snapshot_path: str, env) -> Optional[PPO]:
         """
         Load a snapshot model.
@@ -319,6 +439,43 @@ class OpponentPool:
             print(f"Error loading snapshot {snapshot_path}: {e}")
             return None
 
+    @staticmethod
+    def load_model_from_path(model_path: str, env) -> Optional[PPO]:
+        """
+        Load a model from any path (not necessarily in the pool).
+
+        This allows loading models that are not registered in the pool metadata,
+        for example models saved outside the opponent pool system.
+
+        Args:
+            model_path: Path to model file (.zip)
+            env: Environment for loading model
+
+        Returns:
+            Loaded PPO model, or None if loading failed
+        """
+        if not os.path.exists(model_path):
+            print(f"Error: Model path does not exist: {model_path}")
+            return None
+
+        try:
+            # Suppress SB3 wrapping messages
+            with contextlib.redirect_stdout(StringIO()):
+                model = PPO.load(model_path, env=env)
+            return model
+        except Exception as e:
+            print(f"Error loading model from {model_path}: {e}")
+            return None
+
+    def get_current_policy_elo(self) -> float:
+        """
+        Get current policy ELO rating.
+
+        Returns:
+            Current policy ELO rating
+        """
+        return self.current_policy_elo
+
     def get_statistics(self) -> Dict:
         """
         Get statistics about the pool.
@@ -332,6 +489,7 @@ class OpponentPool:
                 "avg_winrate": 0.0,
                 "avg_elo": 0.0,
                 "best_elo": 0.0,
+                "current_policy_elo": self.current_policy_elo,
             }
 
         winrates = [s.winrate for s in self.snapshots.values()]
@@ -343,5 +501,6 @@ class OpponentPool:
             "avg_elo": np.mean(elos),
             "best_elo": max(elos),
             "min_elo": min(elos),
+            "current_policy_elo": self.current_policy_elo,
         }
 

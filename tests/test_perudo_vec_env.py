@@ -56,7 +56,7 @@ def test_vec_env_step():
     actions = np.array([vec_env.action_space.sample() for _ in range(2)])
     
     # Step environments
-    next_obs, rewards, dones, truncated, infos = vec_env.step(actions)
+    next_obs, rewards, dones, infos = vec_env.step(actions)
     
     assert isinstance(next_obs, np.ndarray)
     assert next_obs.shape == (2, next_obs.shape[1])
@@ -64,8 +64,6 @@ def test_vec_env_step():
     assert rewards.shape == (2,)
     assert isinstance(dones, np.ndarray)
     assert dones.shape == (2,)
-    assert isinstance(truncated, np.ndarray)
-    assert truncated.shape == (2,)
     assert isinstance(infos, list)
     assert len(infos) == 2
 
@@ -124,7 +122,7 @@ def test_vec_env_opponent_turns():
         if vec_env.active_agent_ids[0] == 0:
             # Learning agent's turn - take action
             action = np.array([vec_env.action_space.sample()])
-            obs, rewards, dones, truncated, infos = vec_env.step(action)
+            obs, rewards, dones, infos = vec_env.step(action)
             steps += 1
             
             if dones[0]:

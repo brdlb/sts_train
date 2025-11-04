@@ -42,6 +42,16 @@ class PerudoRules:
         if game_state.player_dice_count[player_id] == 0:
             return False, "Player already out of game"
 
+        # First bid in round cannot be value 1 (since 1s are jokers and counted as any number)
+        # Exception: in special round, first bid can be value 1 (but 1s are NOT jokers in special round)
+        if game_state.current_bid is None:
+            if game_state.special_round_active:
+                # In special round, first bid must be quantity 1, any value (including 1)
+                if quantity != 1:
+                    return False, "First bid in special round must be quantity 1"
+            elif value == 1:
+                return False, "First bid cannot have value 1 (1s are jokers)"
+
         # Check that bid is higher than previous
         if game_state.current_bid is not None:
             prev_quantity, prev_value = game_state.current_bid
@@ -97,7 +107,9 @@ class PerudoRules:
     @staticmethod
     def can_call_pacao(game_state: GameState, player_id: int) -> Tuple[bool, str]:
         """
-        Check if player can call pacao.
+        Check if player can call pacao (believe).
+
+        According to rules: any player can believe (not just those with 1 die).
 
         Args:
             game_state: Current game state
@@ -110,13 +122,14 @@ class PerudoRules:
             return False, "Not your turn"
 
         if game_state.current_bid is None:
-            return False, "No bid for pacao"
+            return False, "No bid to believe"
 
-        if game_state.pacao_called:
-            return False, "Pacao already called"
+        if game_state.player_dice_count[player_id] == 0:
+            return False, "Player already out of game"
 
-        if game_state.player_dice_count[player_id] != 1:
-            return False, "Only players with one die can call pacao"
+        # Check that there is a previous bid
+        if len(game_state.bid_history) == 0:
+            return False, "No previous bid"
 
         return True, ""
 
@@ -163,33 +176,40 @@ class PerudoRules:
         pacao_success: bool,
         actual_count: int,
         bid_quantity: int,
-    ) -> Tuple[int, int]:
+    ) -> Tuple[int, int, Optional[int]]:
         """
-        Process pacao result.
+        Process pacao (believe) result.
+
+        New rules:
+        - If dice count exactly equals bid: believer gains die (if < 5) or starts next round (if 5)
+        - If dice count doesn't equal bid: believer loses die
 
         Args:
             game_state: Current game state
             caller_id: ID of player who called pacao
-            pacao_success: Whether pacao succeeded (True if actual >= bid)
+            pacao_success: Whether pacao succeeded (True if actual == bid)
             actual_count: Actual dice count
             bid_quantity: Quantity in bid
 
         Returns:
-            Tuple (ID of player who loses die, number of dice lost)
+            Tuple (ID of player who loses die, number of dice lost, ID of player who starts next round)
+            If believer gains die or starts next round, loser_id will be None
         """
         if not game_state.bid_history:
-            return caller_id, 1
+            return caller_id, 1, None
 
-        previous_player = game_state.bid_history[-1][0]
-
-        # If pacao succeeded (actual >= bid), player who made bid loses die
-        # If pacao failed (actual < bid), caller loses die
+        # If dice exactly equals bid: believer benefits
         if pacao_success:
-            loser = previous_player
+            # Believer gains a die if they have less than 5, or starts next round if they have 5
+            if game_state.player_dice_count[caller_id] < game_state.dice_per_player:
+                # Gain a die (handled separately in environment)
+                return None, 0, None
+            else:
+                # Start next round (handled separately in environment)
+                return None, 0, caller_id
         else:
-            loser = caller_id
-
-        return loser, 1
+            # If dice doesn't equal bid: believer loses die
+            return caller_id, 1, None
 
     @staticmethod
     def get_available_actions(
@@ -228,12 +248,17 @@ class PerudoRules:
         # Actions: bids
         # Generate possible bids
         if game_state.current_bid is None:
-            # First bid - can be any
-            min_quantity = 1
-            max_quantity = sum(game_state.player_dice_count)  # Considering pasari
-            for q in range(min_quantity, min(max_quantity + 1, 30)):  # Limit to reasonable maximum
+            if game_state.special_round_active:
+                # First bid in special round: quantity 1, any value (including 1)
                 for v in range(1, game_state.total_dice_values + 1):
-                    actions.append(("bid", q, v))
+                    actions.append(("bid", 1, v))
+            else:
+                # First bid - can be any except value 1
+                min_quantity = 1
+                max_quantity = sum(game_state.player_dice_count)  # Considering pasari
+                for q in range(min_quantity, min(max_quantity + 1, 30)):  # Limit to reasonable maximum
+                    for v in range(2, game_state.total_dice_values + 1):  # Skip value 1 for first bid
+                        actions.append(("bid", q, v))
         else:
             # Subsequent bids must be higher
             prev_quantity, prev_value = game_state.current_bid

@@ -150,3 +150,72 @@ def test_env_game_over():
     
     assert terminated or env.game_state.game_over
 
+
+def test_next_round_starts_with_player_who_lost_die():
+    """Test that next round starts with player who lost die in challenge."""
+    env = PerudoEnv(num_players=3, dice_per_player=5)
+    obs, _ = env.reset()
+    
+    # Set up a bid
+    env.game_state.set_bid(0, 10, 3)  # Player 0 makes bid
+    env.game_state.current_player = 1
+    env.set_active_player(1)
+    
+    # Set dice so challenge will succeed (bid too high)
+    env.game_state.player_dice = [[2, 2, 2, 2, 2], [2, 2, 2, 2, 2], [2, 2, 2, 2, 2]]  # No 3s
+    
+    # Challenge action (action 0 = challenge)
+    challenge_action = 0
+    obs, reward, terminated, truncated, info = env.step(challenge_action)
+    
+    # Player 0 (bid maker) should lose die and start next round
+    assert env.game_state.current_player == 0
+    assert env.game_state.player_dice_count[0] == 4  # Lost one die
+
+
+def test_next_round_starts_with_player_who_gained_die():
+    """Test that next round starts with player who gained die in believe."""
+    env = PerudoEnv(num_players=2, dice_per_player=5)
+    env.game_state.player_dice_count[0] = 3  # Bid maker has 3 dice
+    env.game_state.player_dice_count[1] = 4  # Believer has 4 dice
+    obs, _ = env.reset()
+    
+    # Set up a bid
+    env.game_state.set_bid(0, 5, 3)  # Player 0 makes bid
+    env.game_state.current_player = 1
+    env.set_active_player(1)
+    
+    # Set dice so count exactly equals bid (5 threes)
+    env.game_state.player_dice = [[2, 2, 3], [1, 1, 3, 3]]
+    
+    # Find pacao action (believe)
+    # Action 0 = challenge, action 1 = pacao
+    pacao_action = 1
+    obs, reward, terminated, truncated, info = env.step(pacao_action)
+    
+    # Player 1 (believer) should gain die and start next round
+    assert env.game_state.current_player == 1
+    assert env.game_state.player_dice_count[1] == 5  # Gained one die
+
+
+def test_next_round_starts_with_player_who_lost_die_in_believe():
+    """Test that next round starts with player who lost die when believe failed."""
+    env = PerudoEnv(num_players=2, dice_per_player=5)
+    obs, _ = env.reset()
+    
+    # Set up a bid
+    env.game_state.set_bid(0, 5, 3)  # Player 0 makes bid
+    env.game_state.current_player = 1
+    env.set_active_player(1)
+    
+    # Set dice so count doesn't equal bid (more than bid)
+    env.game_state.player_dice = [[1, 3, 3, 3, 3], [1, 3, 3, 3, 5]]  # 9 threes total
+    
+    # Find pacao action (believe)
+    pacao_action = 1
+    obs, reward, terminated, truncated, info = env.step(pacao_action)
+    
+    # Player 1 (believer) should lose die and start next round
+    assert env.game_state.current_player == 1
+    assert env.game_state.player_dice_count[1] == 4  # Lost one die
+
