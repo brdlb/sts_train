@@ -86,6 +86,11 @@ class PerudoEnv(gym.Env):
         # Information about last action (for debugging)
         self.last_action_info = {}
 
+        self.episode_reward = 0.0
+        self.episode_length = 0
+        self.last_episode_reward = 0.0
+        self.last_episode_length = 0
+
     def reset(
         self, seed: Optional[int] = None, options: Optional[Dict] = None
     ) -> Tuple[np.ndarray, Dict]:
@@ -114,6 +119,9 @@ class PerudoEnv(gym.Env):
             "player_id": self.active_player_id,
             "game_state": self.game_state.get_public_info(),
         }
+
+        self.episode_reward = 0.0
+        self.episode_length = 0
 
         return observation, info
 
@@ -265,9 +273,14 @@ class PerudoEnv(gym.Env):
         # Get new observation
         observation = self._get_observation(self.active_player_id)
 
+        # накопление суммарной награды и длины эпизода
+        self.episode_reward += reward
+        self.episode_length += 1
+
         # Check game over
         terminated = self.game_state.game_over
         truncated = False  # Not implemented yet
+        done = terminated or truncated
 
         info = {
             "player_id": self.active_player_id,
@@ -276,6 +289,15 @@ class PerudoEnv(gym.Env):
             "action_info": self.last_action_info,
             "game_state": self.game_state.get_public_info(),
         }
+
+        # если эпизод завершился, сохраняем статистику для realtime
+        if done:
+            self.last_episode_reward = self.episode_reward
+            self.last_episode_length = self.episode_length
+            info["episode_reward"] = self.last_episode_reward
+            info["episode_length"] = self.last_episode_length
+            if hasattr(self.game_state, "winner"):
+                info["winner"] = self.game_state.winner
 
         return observation, reward, terminated, truncated, info
 

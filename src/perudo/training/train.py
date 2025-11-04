@@ -13,6 +13,14 @@ from ..game.perudo_vec_env import PerudoMultiAgentVecEnv
 from .config import Config, DEFAULT_CONFIG
 from .opponent_pool import OpponentPool
 
+import sys
+
+# --- Очистка модуля из sys.modules, чтобы избежать предупреждения runpy ---
+if __name__ == "__main__":
+    modname = __name__
+    if modname in sys.modules:
+        del sys.modules[modname]
+
 
 class AdvantageNormalizationCallback(BaseCallback):
     """
@@ -46,36 +54,57 @@ class AdvantageNormalizationCallback(BaseCallback):
             # which normalizes across the entire rollout buffer
             pass
         return True
+    
+    def _on_step(self) -> bool:
+        """
+        Dummy method required by BaseCallback. Returns True to fulfill abstract class requirements.
+        """
+        return True
 
 
 class SelfPlayTrainingCallback(BaseCallback):
     """
     Callback for self-play training with opponent pool.
     """
-    
     def __init__(
         self,
         opponent_pool: OpponentPool,
         snapshot_freq: int = 50000,
         verbose: int = 0,
+        print_freq: int = 1000
     ):
         super().__init__(verbose)
         self.opponent_pool = opponent_pool
         self.snapshot_freq = snapshot_freq
+        self.print_freq = print_freq
         self.current_step = 0
         self.vec_env = None
-        
+        # Буферы для realtime-статистики
+        self.episode_rewards = []
+        self.episode_lengths = []
+        self.episode_wins = []
+
     def _on_training_start(self) -> None:
-        """Called at the start of training."""
-        # Get reference to vec_env
         if hasattr(self.model, 'env'):
             self.vec_env = self.model.env
     
     def _on_step(self) -> bool:
-        """Called after each step."""
         self.current_step += 1
-        
-        # Save snapshot periodically
+        # Собираем episode_info из infos всех env (SB3 их передаёт в self.locals["infos"])
+        infos = self.locals.get("infos", [])
+        for info in infos:
+            # Добавляем статистику только если эпизод завершен (info содержит episode_reward)
+            if isinstance(info, dict) and "episode_reward" in info:
+                self.episode_rewards.append(info["episode_reward"])
+                self.episode_lengths.append(info["episode_length"])
+                win = 1 if info.get("winner", -1) == 0 else 0
+                self.episode_wins.append(win)
+        if self.current_step % self.print_freq == 0:
+            avg_reward = np.mean(self.episode_rewards[-100:]) if self.episode_rewards else 0
+            avg_length = np.mean(self.episode_lengths[-100:]) if self.episode_lengths else 0
+            win_rate = 100 * np.mean(self.episode_wins[-100:]) if self.episode_wins else 0
+            print(f"[Step {self.current_step}] AvgReward(100): {avg_reward:.2f}, AvgLen(100): {avg_length:.1f}, WinRate(100): {win_rate:.1f}%, Completed episodes: {len(self.episode_rewards)}")
+        # Стандартная логика снапшотов и синхронизации
         if self.current_step % self.snapshot_freq == 0:
             self.opponent_pool.save_snapshot(
                 self.model,
@@ -86,18 +115,13 @@ class SelfPlayTrainingCallback(BaseCallback):
                 pool_stats = self.opponent_pool.get_statistics()
                 print(f"Saved snapshot at step {self.current_step}")
                 print(f"Pool statistics: {pool_stats}")
-        
         # Update vec_env with current step for opponent sampling
         if self.vec_env is not None and hasattr(self.vec_env, 'reset'):
-            # Store current step in vec_env for use in reset()
             self.vec_env.current_step = self.current_step
-        
         return True
     
     def _on_rollout_end(self) -> bool:
-        """Called when rollout ends."""
-        # Winrate statistics are updated in VecEnv.step_wait()
-        # when episodes end, so we don't need to do anything here
+        # Winrate statistics are updated in VecEnv.step_wait() when episodes end, so we don't need to do anything here
         return True
 
 

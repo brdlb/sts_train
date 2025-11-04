@@ -244,7 +244,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
             observations.append(obs)
             rewards.append(reward)
             dones.append(done)
-            infos.append(info)
+            infos.append(info)  # info ТЕПЕРЬ СОДЕРЖИТ episode_reward и episode_length из внутреннего env
 
         return (
             np.array(observations),
