@@ -122,8 +122,65 @@ def test_get_available_actions():
     assert any(action[0] == "challenge" for action in actions)
     assert not any(action[0] == "pacao" for action in actions)
     assert any(action[0] == "bid" for action in actions)
-
+    
     # Player with 1 die should have pacao available
     game_state.player_dice_count[1] = 1
     actions = PerudoRules.get_available_actions(game_state, 1)
     assert any(action[0] == "pacao" for action in actions)
+
+
+def test_special_round_value_cannot_change():
+    """Test that value cannot change in special round."""
+    game_state = GameState(num_players=2, dice_per_player=5)
+    game_state.player_dice_count[0] = 1
+    game_state.roll_dice()  # This activates special round
+    
+    # Set first bid
+    game_state.set_bid(0, 2, 4)
+    game_state.current_player = 1
+    
+    # In special round, cannot change value
+    is_valid, msg = PerudoRules.is_valid_bid(game_state, 1, 3, 5)
+    assert not is_valid
+    assert "special round" in msg.lower()
+    
+    # Can increase quantity with same value
+    is_valid, msg = PerudoRules.is_valid_bid(game_state, 1, 3, 4)
+    assert is_valid
+
+
+def test_challenge_with_special_round():
+    """Test challenge counting in special round (ones not jokers)."""
+    game_state = GameState(num_players=2, dice_per_player=5)
+    game_state.player_dice_count[0] = 1
+    game_state.special_round_active = True
+    
+    # Set dice: player 0 has [1, 1, 3], player 1 has [2, 2, 3, 3, 5]
+    game_state.player_dice = [[1, 1, 3], [2, 2, 3, 3, 5]]
+    
+    # Set bid: 5 threes (expecting 1s to count as jokers, but they shouldn't in special round)
+    game_state.set_bid(0, 5, 3)
+    game_state.current_player = 1
+    
+    # Challenge: actual count should be 3 (only the 3s, not the 1s)
+    success, actual_count, bid_quantity = game_state.challenge_bid(1)
+    assert actual_count == 3  # 1 from player 0 + 2 from player 1
+    assert success  # Challenge succeeds because 3 < 5
+
+
+def test_challenge_with_normal_round():
+    """Test challenge counting in normal round (ones are jokers)."""
+    game_state = GameState(num_players=2, dice_per_player=5)
+    game_state.special_round_active = False
+    
+    # Set dice: player 0 has [1, 1, 3], player 1 has [2, 2, 3, 3, 5]
+    game_state.player_dice = [[1, 1, 3], [2, 2, 3, 3, 5]]
+    
+    # Set bid: 5 threes (expecting 1s to count as jokers)
+    game_state.set_bid(0, 5, 3)
+    game_state.current_player = 1
+    
+    # Challenge: actual count should be 5 (3s + 1s as jokers)
+    success, actual_count, bid_quantity = game_state.challenge_bid(1)
+    assert actual_count == 5  # 1, 1, 3 from player 0 + 3, 3 from player 1 (1s count as 3s)
+    assert not success  # Challenge fails because 5 >= 5
