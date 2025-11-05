@@ -45,7 +45,7 @@ class OpponentPool:
         max_pool_size: int = 20,
         min_pool_size: int = 10,
         keep_best: int = 3,
-        snapshot_freq: int = 50000,
+        snapshot_freq: int = 5000,
         elo_k: int = 32,
     ):
         """

@@ -309,6 +309,8 @@ class SelfPlayTraining:
                 # Suppress SB3 wrapping messages
                 with contextlib.redirect_stdout(StringIO()):
                     self.model = PPO.load(latest_model_path, env=self.vec_env)
+                # Enable TensorBoard logging for loaded model
+                self.model.tensorboard_log = config.training.log_dir
                 print(f"Successfully loaded model from {latest_model_path}")
                 
                 # Extract step count from filename if possible
@@ -343,6 +345,7 @@ class SelfPlayTraining:
                 vf_coef=config.training.vf_coef,
                 max_grad_norm=config.training.max_grad_norm,
                 verbose=config.training.verbose,  # 1 = progress bar, 0 = no output
+                tensorboard_log=config.training.log_dir,  # Enable TensorBoard logging
             )
         
         # Update opponent pool with current model

@@ -23,17 +23,17 @@ class TrainingConfig:
 
     # PPO parameters
     policy: str = "MlpPolicy"
-    policy_kwargs: Optional[Dict] = field(default_factory=lambda: dict(net_arch=[256, 128, 64]))
+    policy_kwargs: Optional[Dict] = field(default_factory=lambda: dict(net_arch=[128, 64]))
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
-    learning_rate: float = 1e-4
-    n_steps: int = 2048
-    batch_size: int = 64
-    n_epochs: int = 10
-    gamma: float = 0.99
+    learning_rate: float = 1.5e-4  # Reduced for stability (prevents catastrophic forgetting)
+    n_steps: int = 1024  # Increased for more stable updates (was 512, too small)
+    batch_size: int = 128
+    n_epochs: int = 6  # Increased to better train value function (was 4)
+    gamma: float = 0.95
     gae_lambda: float = 0.95
-    clip_range: float = 0.2 
-    ent_coef: float = 0.02
-    vf_coef: float = 0.5
+    clip_range: float = 0.15  # Reduced for more conservative policy updates (prevents large approx_kl)
+    ent_coef: float = 0.02  # Increased to prevent premature convergence (was 0.01)
+    vf_coef: float = 0.75  # Increased to better train value function (was 0.5)
     max_grad_norm: float = 0.5
 
     # Training parameters
