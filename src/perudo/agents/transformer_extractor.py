@@ -127,18 +127,41 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
         # Padding is when quantity == 0 and value == 0
         padding_mask = (quantities == 0) & (values == 0)  # (batch_size, max_history_length)
         
+        # Check if sequences have valid (non-padding) elements
+        has_valid_elements = ~padding_mask.all(dim=1)  # (batch_size,) - True if sequence has at least one valid element
+        
+        # Create modified mask that ensures at least one position is always valid
+        # This prevents the transformer from receiving fully masked sequences
+        modified_mask = padding_mask.clone()
+        all_padded = modified_mask.all(dim=1)  # (batch_size,) - True if sequence is fully padded
+        # If all positions are padded, make the first position valid (set to False)
+        if all_padded.any():
+            modified_mask[all_padded, 0] = False  # Unmask first position for fully padded sequences
+        
         # Transformer encoder
         # Note: src_key_padding_mask expects True for positions to ignore (padding)
         transformer_output = self.transformer_encoder(
             bid_embeds,
-            src_key_padding_mask=padding_mask
+            src_key_padding_mask=modified_mask
         )  # (batch_size, max_history_length, embed_dim)
         
         # Aggregate transformer output: take the last valid (non-padding) element
-        # For simplicity, we'll use attention pooling or take the first non-padding element
-        # Here we use a simple approach: take the last position (which should contain context)
-        # In practice, we could use learned attention pooling
-        aggregated_history = transformer_output[:, -1, :]  # (batch_size, embed_dim)
+        # For sequences with valid elements, use the last valid position
+        # For fully padded sequences (which we made the first position valid), use first position
+        aggregated_history = torch.zeros(batch_size, self.embed_dim, device=bid_embeds.device)
+        for i in range(batch_size):
+            if has_valid_elements[i]:
+                # Find the last valid position (non-padding)
+                valid_positions = ~modified_mask[i]
+                if valid_positions.any():
+                    last_valid_idx = valid_positions.nonzero(as_tuple=True)[0][-1]
+                    aggregated_history[i] = transformer_output[i, last_valid_idx]
+                else:
+                    # Fallback: use first position
+                    aggregated_history[i] = transformer_output[i, 0]
+            else:
+                # Fully padded sequence - use first position (which we made valid)
+                aggregated_history[i] = transformer_output[i, 0]
         
         # Process static information
         static_features = self.static_mlp(static_info)  # (batch_size, embed_dim // 2)

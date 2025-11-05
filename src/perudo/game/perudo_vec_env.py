@@ -367,7 +367,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 reward = 0.0
                 info = {}
                 
-                observations.append(obs)
+                observations_list.append(obs)
                 rewards.append(reward)
                 dones.append(done)
                 infos.append(info)
