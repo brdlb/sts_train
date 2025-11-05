@@ -34,6 +34,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
         total_dice_values: int = 6,
         max_quantity: int = 30,
         history_length: int = 10,
+        max_history_length: Optional[int] = None,
         opponent_pool: Optional[Any] = None,  # OpponentPool type
         current_model: Optional[PPO] = None,
     ):
@@ -46,7 +47,8 @@ class PerudoMultiAgentVecEnv(VecEnv):
             dice_per_player: Number of dice per player
             total_dice_values: Total possible dice values (usually 6)
             max_quantity: Maximum dice quantity in bid
-            history_length: Bid history length in observation
+            history_length: Bid history length in observation (deprecated, use max_history_length)
+            max_history_length: Maximum length of bid history sequence (defaults to history_length)
             opponent_pool: Opponent pool for sampling opponents
             current_model: Current learning model (for self-play)
         """
@@ -65,6 +67,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 total_dice_values=total_dice_values,
                 max_quantity=max_quantity,
                 history_length=history_length,
+                max_history_length=max_history_length,  # Use provided max_history_length
             )
             self.envs.append(env)
 
@@ -106,7 +109,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
 
         super().__init__(num_envs, obs_space, action_space)
 
-    def reset(self, seeds: Optional[List[int]] = None, options: Optional[List[Dict]] = None, current_step: Optional[int] = None) -> np.ndarray:
+    def reset(self, seeds: Optional[List[int]] = None, options: Optional[List[Dict]] = None, current_step: Optional[int] = None):
         """Reset all environments."""
         if seeds is None:
             seeds = [None] * self.num_envs
@@ -115,7 +118,8 @@ class PerudoMultiAgentVecEnv(VecEnv):
         if current_step is None:
             current_step = self.current_step
 
-        observations = []
+        # For Dict observations, we need to collect observations as dicts and then convert to dict of arrays
+        observations_list = []
         for i, env in enumerate(self.envs):
             # Reset environment (this will randomly select number of players 3-8)
             obs, info = env.reset(seed=seeds[i], options=options[i])
@@ -161,9 +165,14 @@ class PerudoMultiAgentVecEnv(VecEnv):
 
                 if opponent_model is not None:
                     obs_for_opp = env.get_observation_for_player(self.active_agent_ids[i])
-                    obs_array = obs_for_opp.reshape(1, -1)
                     
-                    action, _ = opponent_model.predict(obs_array, deterministic=False)
+                    # Handle both dict and array observations
+                    if isinstance(obs_for_opp, dict):
+                        obs_for_predict = {key: np.array([value]) for key, value in obs_for_opp.items()}
+                    else:
+                        obs_for_predict = obs_for_opp.reshape(1, -1)
+                    
+                    action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
                     action = int(action[0])
                     
                     env.set_active_player(self.active_agent_ids[i])
@@ -188,9 +197,23 @@ class PerudoMultiAgentVecEnv(VecEnv):
 
             # Get observation for learning agent
             obs = env.get_observation_for_player(0)
-            observations.append(obs)
+            observations_list.append(obs)
 
-        return np.array(observations)
+        # Convert list of dicts to dict of arrays for VecEnv
+        if len(observations_list) == 0:
+            # Should not happen, but handle gracefully
+            return observations_list
+        
+        if isinstance(observations_list[0], dict):
+            # Dict observation space: convert to dict of arrays
+            observations_dict = {
+                key: np.array([obs[key] for obs in observations_list])
+                for key in observations_list[0].keys()
+            }
+            return observations_dict
+        else:
+            # Array observation space: convert to array
+            return np.array(observations_list)
 
     def _sample_opponents_for_env(
         self,
@@ -248,15 +271,16 @@ class PerudoMultiAgentVecEnv(VecEnv):
         """
         self._actions = actions
 
-    def step_wait(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
+    def step_wait(self):
         """
         Wait for all environments to finish stepping.
 
         Returns:
             Tuple of (observations, rewards, dones, infos)
+            Note: observations can be dict or array depending on observation_space
             Note: dones combines both terminated and truncated for VecMonitor compatibility
         """
-        observations = []
+        observations_list = []
         rewards = []
         dones = []
         infos = []
@@ -389,10 +413,15 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 if opponent_model is not None:
                     # Get observation for opponent
                     obs_for_opp = env.get_observation_for_player(self.active_agent_ids[i])
-                    obs_array = obs_for_opp.reshape(1, -1)
-
+                    
+                    # Handle both dict and array observations
+                    if isinstance(obs_for_opp, dict):
+                        obs_for_predict = {key: np.array([value]) for key, value in obs_for_opp.items()}
+                    else:
+                        obs_for_predict = obs_for_opp.reshape(1, -1)
+                    
                     # Get action from opponent model
-                    action, _ = opponent_model.predict(obs_array, deterministic=False)
+                    action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
                     action = int(action[0])
 
                     env.set_active_player(self.active_agent_ids[i])
@@ -471,7 +500,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
             if obs is None or self.active_agent_ids[i] != 0:
                 obs = env.get_observation_for_player(0)
 
-            observations.append(obs)
+            observations_list.append(obs)
             rewards.append(reward)
             # Combine terminated and truncated into dones for VecMonitor compatibility
             dones.append(done)
@@ -479,21 +508,32 @@ class PerudoMultiAgentVecEnv(VecEnv):
 
         # CRITICAL: Ensure we have exactly num_envs results
         # This prevents ValueError when VecMonitor tries to broadcast arrays
-        if len(observations) != self.num_envs:
+        if len(observations_list) != self.num_envs:
             raise ValueError(
-                f"Expected {self.num_envs} results but got {len(observations)}. "
+                f"Expected {self.num_envs} results but got {len(observations_list)}. "
                 f"This indicates a bug in step_wait() where not all environments "
                 f"added results to the output lists."
             )
 
+        # Convert observations to proper format for VecEnv
+        if len(observations_list) > 0 and isinstance(observations_list[0], dict):
+            # Dict observation space: convert to dict of arrays
+            observations = {
+                key: np.array([obs[key] for obs in observations_list])
+                for key in observations_list[0].keys()
+            }
+        else:
+            # Array observation space: convert to array
+            observations = np.array(observations_list)
+
         return (
-            np.array(observations),
+            observations,
             np.array(rewards),
             np.array(dones),
             infos,
         )
 
-    def step(self, actions: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
+    def step(self, actions: np.ndarray):
         """
         Step all environments synchronously.
 
@@ -502,6 +542,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
 
         Returns:
             Tuple of (observations, rewards, dones, infos)
+            Note: observations can be dict or array depending on observation_space
             Note: dones combines both terminated and truncated for VecMonitor compatibility
         """
         self.step_async(actions)

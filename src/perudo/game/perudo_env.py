@@ -14,6 +14,7 @@ from .game_state import GameState
 from .rules import PerudoRules
 from ..utils.helpers import (
     create_observation_vector,
+    create_observation_dict,
     calculate_reward,
     action_to_bid,
     decode_bid,
@@ -70,6 +71,7 @@ class PerudoEnv(gym.Env):
         total_dice_values: int = 6,
         max_quantity: int = 30,
         history_length: int = 10,
+        max_history_length: Optional[int] = None,
         render_mode: Optional[str] = None,
     ):
         """
@@ -81,7 +83,8 @@ class PerudoEnv(gym.Env):
             dice_per_player: Number of dice per player
             total_dice_values: Total possible dice values (usually 6)
             max_quantity: Maximum dice quantity in bid
-            history_length: Bid history length in observation
+            history_length: Bid history length in observation (deprecated, use max_history_length)
+            max_history_length: Maximum length of bid history sequence (defaults to history_length)
             render_mode: Render mode
         """
         super().__init__()
@@ -93,7 +96,8 @@ class PerudoEnv(gym.Env):
         self.dice_per_player = dice_per_player
         self.total_dice_values = total_dice_values
         self.max_quantity = max_quantity
-        self.history_length = history_length
+        self.history_length = history_length  # Keep for backward compatibility
+        self.max_history_length = max_history_length if max_history_length is not None else history_length
         self.render_mode = render_mode
 
         # Create game state with initial num_players (will be recreated in reset())
@@ -103,23 +107,29 @@ class PerudoEnv(gym.Env):
             total_dice_values=total_dice_values,
         )
 
-        # Define observation space with maximum number of players
-        # Format: [agent_id(max_num_players), current_bid(2), history(history_length*3), 
-        #          dice_count(max_num_players), current_player(1), palifico(max_num_players), 
-        #          pacao(1), player_dice(5)]
-        obs_size = (
+        # Define observation space as Dict for transformer architecture
+        # bid_history: sequence of bids (max_history_length, 2) - (quantity, value)
+        # static_info: static information (agent_id, current_bid, dice_count, current_player, palifico, pacao, player_dice)
+        
+        # Calculate static_info size
+        static_info_size = (
             self.max_num_players  # agent_id one-hot
-            + 2  # current_bid
-            + history_length * 3  # history
+            + 2  # current_bid (quantity, value)
             + self.max_num_players  # dice_count
             + 1  # current_player
             + self.max_num_players  # palifico
             + 1  # pacao
             + 5  # player_dice
         )
-        self.observation_space = spaces.Box(
-            low=0, high=100, shape=(obs_size,), dtype=np.float32
-        )
+        
+        self.observation_space = spaces.Dict({
+            "bid_history": spaces.Box(
+                low=0, high=100, shape=(self.max_history_length, 2), dtype=np.int32
+            ),
+            "static_info": spaces.Box(
+                low=0, high=100, shape=(static_info_size,), dtype=np.float32
+            ),
+        })
 
         # Define action space
         # Actions: 0=challenge, 1=pacao, 2+=bid(encoded)
@@ -566,7 +576,7 @@ class PerudoEnv(gym.Env):
 
         return observation, reward, terminated, truncated, info
 
-    def _get_observation(self, player_id: int) -> np.ndarray:
+    def _get_observation(self, player_id: int) -> Dict[str, np.ndarray]:
         """
         Get observation for specific player.
 
@@ -574,11 +584,11 @@ class PerudoEnv(gym.Env):
             player_id: Player ID
 
         Returns:
-            Observation vector
+            Observation dictionary with 'bid_history' and 'static_info' keys
         """
         player_dice = self.game_state.get_player_dice(player_id)
 
-        observation = create_observation_vector(
+        observation = create_observation_dict(
             current_bid=self.game_state.current_bid,
             bid_history=self.game_state.bid_history,
             player_dice_count=self.game_state.player_dice_count,
@@ -586,7 +596,7 @@ class PerudoEnv(gym.Env):
             palifico_active=self.game_state.palifico_active,
             pacao_called=self.game_state.pacao_called,
             player_dice=player_dice,
-            history_length=self.history_length,
+            max_history_length=self.max_history_length,
             max_players=self.max_num_players,  # Use max for observation space
             agent_id=player_id,
             num_agents=self.max_num_players,  # Use max for observation space
@@ -623,7 +633,7 @@ class PerudoEnv(gym.Env):
         """
         self.active_player_id = player_id
 
-    def get_observation_for_player(self, player_id: int) -> np.ndarray:
+    def get_observation_for_player(self, player_id: int) -> Dict[str, np.ndarray]:
         """
         Get observation for specific player.
 
@@ -631,7 +641,7 @@ class PerudoEnv(gym.Env):
             player_id: Player ID
 
         Returns:
-            Observation vector
+            Observation dictionary with 'bid_history' and 'static_info' keys
         """
         return self._get_observation(player_id)
 

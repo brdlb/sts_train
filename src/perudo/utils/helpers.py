@@ -2,7 +2,7 @@
 Helper functions for working with Perudo.
 """
 
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 import numpy as np
 
 
@@ -95,6 +95,95 @@ def bid_to_action(quantity: int, value: int, max_quantity: int = 30) -> int:
     """
     encoded = encode_bid(quantity, value, max_quantity)
     return 2 + encoded  # Offset by 2 (challenge and pacao)
+
+
+def create_observation_dict(
+    current_bid: Optional[Tuple[int, int]],
+    bid_history: List[Tuple[int, int, int]],
+    player_dice_count: List[int],
+    current_player: int,
+    palifico_active: List[bool],
+    pacao_called: bool,
+    player_dice: List[int],  # Current player's dice (visible only to them)
+    max_history_length: int = 20,
+    max_players: int = 6,
+    agent_id: Optional[int] = None,
+    num_agents: int = 4,
+) -> Dict[str, np.ndarray]:
+    """
+    Create observation dictionary for transformer-based agent.
+    
+    Args:
+        current_bid: Current bid (quantity, value)
+        bid_history: Bid history as list of (player_id, quantity, value)
+        player_dice_count: Number of dice for each player
+        current_player: Current player
+        palifico_active: Palifico flags for each player
+        pacao_called: Pacao call flag
+        player_dice: Current player's dice
+        max_history_length: Maximum length of bid history sequence
+        max_players: Maximum number of players
+        agent_id: Agent ID for one-hot encoding (0 to num_agents-1)
+        num_agents: Total number of agents (for one-hot encoding)
+    
+    Returns:
+        Dictionary with 'bid_history' and 'static_info' keys
+    """
+    # Build bid_history sequence (max_history_length, 2) - only quantity and value
+    bid_history_array = np.zeros((max_history_length, 2), dtype=np.int32)
+    for i in range(max_history_length):
+        # Take from end of history (most recent first)
+        history_idx = len(bid_history) - 1 - i
+        if history_idx >= 0:
+            _, quantity, value = bid_history[history_idx]
+            bid_history_array[i] = [quantity, value]
+        # else: padding (already zeros)
+    
+    # Build static_info vector
+    static_parts = []
+    
+    # Agent ID one-hot encoding (num_agents values)
+    if agent_id is not None:
+        agent_id_onehot = np.zeros(num_agents, dtype=np.float32)
+        if 0 <= agent_id < num_agents:
+            agent_id_onehot[agent_id] = 1.0
+        static_parts.append(agent_id_onehot)
+    else:
+        static_parts.append(np.zeros(num_agents, dtype=np.float32))
+    
+    # Current bid (2 values: quantity, value) or (0, 0) if no bid
+    if current_bid is not None:
+        static_parts.append(np.array([current_bid[0], current_bid[1]], dtype=np.float32))
+    else:
+        static_parts.append(np.array([0.0, 0.0], dtype=np.float32))
+    
+    # Number of dice for each player (max_players values)
+    dice_count_padded = player_dice_count + [0] * (max_players - len(player_dice_count))
+    static_parts.append(np.array(dice_count_padded[:max_players], dtype=np.float32))
+    
+    # Current player (1 value)
+    static_parts.append(np.array([current_player], dtype=np.float32))
+    
+    # Palifico flags (max_players values)
+    palifico_padded = [1.0 if p else 0.0 for p in palifico_active] + [0.0] * (
+        max_players - len(palifico_active)
+    )
+    static_parts.append(np.array(palifico_padded[:max_players], dtype=np.float32))
+    
+    # Pacao flag (1 value)
+    static_parts.append(np.array([1.0 if pacao_called else 0.0], dtype=np.float32))
+    
+    # Current player's dice (5 values, pad with zeros if less)
+    dice_padded = player_dice + [0] * (5 - len(player_dice))
+    static_parts.append(np.array(dice_padded[:5], dtype=np.float32))
+    
+    # Combine static parts
+    static_info = np.concatenate(static_parts, dtype=np.float32)
+    
+    return {
+        "bid_history": bid_history_array,
+        "static_info": static_info,
+    }
 
 
 def create_observation_vector(

@@ -22,8 +22,8 @@ class TrainingConfig:
     """Training configuration."""
 
     # PPO parameters
-    policy: str = "MlpPolicy"
-    policy_kwargs: Optional[Dict] = field(default_factory=lambda: dict(net_arch=[128, 64]))
+    policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
+    policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     learning_rate: float = 1.5e-4  # Reduced for stability (prevents catastrophic forgetting)
     n_steps: int = 1024  # Increased for more stable updates (was 512, too small)
@@ -35,6 +35,14 @@ class TrainingConfig:
     ent_coef: float = 0.02  # Increased to prevent premature convergence (was 0.01)
     vf_coef: float = 0.75  # Increased to better train value function (was 0.5)
     max_grad_norm: float = 0.5
+    
+    # Transformer parameters
+    transformer_features_dim: int = 256
+    transformer_num_layers: int = 2
+    transformer_num_heads: int = 4
+    transformer_embed_dim: int = 128
+    transformer_dim_feedforward: int = 512
+    transformer_history_length: int = 20
 
     # Training parameters
     total_timesteps: int = 10_000_000

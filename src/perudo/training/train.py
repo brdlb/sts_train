@@ -17,6 +17,7 @@ from stable_baselines3.common.vec_env import VecNormalize, VecMonitor
 from ..game.perudo_vec_env import PerudoMultiAgentVecEnv
 from .config import Config, DEFAULT_CONFIG
 from .opponent_pool import OpponentPool
+from ..agents.transformer_extractor import TransformerFeaturesExtractor
 
 import sys
 import torch
@@ -275,6 +276,8 @@ class SelfPlayTraining:
         )
         
         # Create vectorized environment
+        # Use transformer_history_length from config if available, otherwise use history_length
+        max_history_length = getattr(config.training, 'transformer_history_length', config.game.history_length)
         vec_env_raw = PerudoMultiAgentVecEnv(
             num_envs=self.num_envs,
             num_players=self.num_players,
@@ -282,6 +285,7 @@ class SelfPlayTraining:
             total_dice_values=config.game.total_dice_values,
             max_quantity=config.game.max_quantity,
             history_length=config.game.history_length,
+            max_history_length=max_history_length,
             opponent_pool=self.opponent_pool,
         )
         
@@ -329,11 +333,33 @@ class SelfPlayTraining:
             # One model for all agents (agent_id is in observation)
             # verbose=1 enables built-in progress bar showing timesteps and episode rewards
             print("Creating new model from scratch...")
+            
+            # Build policy_kwargs with transformer extractor if not provided
+            if config.training.policy_kwargs is None:
+                # Get observation space from environment
+                obs_space = self.vec_env.observation_space
+                
+                # Create policy_kwargs with transformer extractor
+                policy_kwargs = dict(
+                    features_extractor_class=TransformerFeaturesExtractor,
+                    features_extractor_kwargs=dict(
+                        features_dim=config.training.transformer_features_dim,
+                        num_layers=config.training.transformer_num_layers,
+                        num_heads=config.training.transformer_num_heads,
+                        embed_dim=config.training.transformer_embed_dim,
+                        dim_feedforward=config.training.transformer_dim_feedforward,
+                        max_history_length=config.training.transformer_history_length,
+                        max_quantity=config.game.max_quantity,
+                    ),
+                )
+            else:
+                policy_kwargs = config.training.policy_kwargs
+            
             self.model = PPO(
                 policy=config.training.policy,
                 env=self.vec_env,
                 device=device,
-                policy_kwargs=config.training.policy_kwargs,
+                policy_kwargs=policy_kwargs,
                 learning_rate=config.training.learning_rate,
                 n_steps=config.training.n_steps,
                 batch_size=config.training.batch_size,
