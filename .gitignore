@@ -46,6 +46,15 @@ runs/
 .coverage
 htmlcov/
 
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm
+.eslintcache
+
 # OS
 .DS_Store
 Thumbs.db

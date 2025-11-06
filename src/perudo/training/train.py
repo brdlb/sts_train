@@ -259,7 +259,7 @@ class SelfPlayTraining:
         """
         self.config = config
         self.num_players = config.game.num_players
-        self.num_envs = 8
+        self.num_envs = config.training.num_envs
         
         # Create directories
         os.makedirs(config.training.log_dir, exist_ok=True)
@@ -480,8 +480,8 @@ def main():
     parser.add_argument(
         "--num-envs",
         type=int,
-        default=8,
-        help="Number of parallel environments (tables)",
+        default=None,
+        help="Number of parallel environments (tables). If not specified, uses value from config.",
     )
     parser.add_argument(
         "--total-timesteps",
@@ -518,10 +518,8 @@ def main():
     config.training.batch_size = args.batch_size
     config.training.device = args.device
     
-    # Add num_envs to config
-    if not hasattr(config.training, 'num_envs'):
-        config.training.num_envs = args.num_envs
-    else:
+    # Override num_envs from command line if provided
+    if args.num_envs is not None:
         config.training.num_envs = args.num_envs
     
     # Start training

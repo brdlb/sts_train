@@ -45,6 +45,7 @@ class TrainingConfig:
     transformer_history_length: int = 20
 
     # Training parameters
+    num_envs: int = 2  # Number of parallel environments (tables)
     total_timesteps: int = 10_000_000
     save_freq: int = 100_000  # Save model every N steps
     eval_freq: int = 50_000  # Evaluate model every N steps
