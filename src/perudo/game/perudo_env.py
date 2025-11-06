@@ -259,8 +259,8 @@ class PerudoEnv(gym.Env):
                 if action_valid:
                     # Valid action - compensate for previous invalid attempts
                     if self.invalid_action_attempts > 0:
-                        # Calculate compensation: sum of all penalties (1 + 2 + 3 + ... + N)
-                        compensation = self.invalid_action_attempts * (self.invalid_action_attempts + 1) / 2
+                        # Calculate compensation: sum of all penalties, slightly less than the total penalty
+                        compensation = self.invalid_action_penalty_accumulated - 0.1
                         reward += compensation
                         self.invalid_action_attempts = 0  # Reset counter
                         self.invalid_action_penalty_accumulated = 0.0
@@ -271,9 +271,10 @@ class PerudoEnv(gym.Env):
                     # Count bid action (for all players, not just learning agent)
                     self.episode_bid_count += 1
                     self.game_state.next_player()
+                    # Small negative reward for bidding to encourage finishing the round
                     reward += calculate_reward(
                         "bid", False, -1, self.active_player_id, dice_lost=0
-                    )
+                    ) - 0.01
             else:
                 # Invalid action - accumulate penalty and retry
                 self.invalid_action_attempts += 1
@@ -309,8 +310,8 @@ class PerudoEnv(gym.Env):
             if can_challenge:
                 # Valid action - compensate for previous invalid attempts
                 if self.invalid_action_attempts > 0:
-                    # Calculate compensation: sum of all penalties (1 + 2 + 3 + ... + N)
-                    compensation = self.invalid_action_attempts * (self.invalid_action_attempts + 1) / 2
+                    # Calculate compensation: sum of all penalties, slightly less than the total penalty
+                    compensation = self.invalid_action_penalty_accumulated - 0.1
                     reward += compensation
                     self.invalid_action_attempts = 0  # Reset counter
                     self.invalid_action_penalty_accumulated = 0.0
@@ -412,8 +413,8 @@ class PerudoEnv(gym.Env):
             if can_believe:
                 # Valid action - compensate for previous invalid attempts
                 if self.invalid_action_attempts > 0:
-                    # Calculate compensation: sum of all penalties (1 + 2 + 3 + ... + N)
-                    compensation = self.invalid_action_attempts * (self.invalid_action_attempts + 1) / 2
+                    # Calculate compensation: sum of all penalties, slightly less than the total penalty
+                    compensation = self.invalid_action_penalty_accumulated - 0.1
                     reward += compensation
                     self.invalid_action_attempts = 0  # Reset counter
                     self.invalid_action_penalty_accumulated = 0.0

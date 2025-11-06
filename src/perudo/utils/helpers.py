@@ -300,34 +300,32 @@ def calculate_reward(
     """
     reward = 0.0
 
-    # Reward for winning game (increased from 100.0 to 250.0)
+    # Reward for winning game
     if game_over and winner == player_id:
-        reward += 250.0
+        reward += 10.0
 
-    # Penalty for losing dice (reduced from -6.0 to -3.0 per die to balance rewards)
+    # Penalty for losing dice
     if dice_lost > 0:
-        reward -= 3.0 * dice_lost
+        reward -= 2.0 * dice_lost
 
-    # Intermediate rewards for bluffs and challenges (scaled up)
-    # +5.0 for successful challenge/believe (increased from +2.0 to encourage risk-taking)
-    # -2.0 for unsuccessful challenge/believe that led to losing a die (kept at -2.0)
+    # Intermediate rewards for bluffs and challenges
     if action_type == "challenge" and challenge_success is not None:
         if challenge_success:
             # Successfully caught someone's bluff
-            reward += 5.0
+            reward += 1.0
         else:
             # Unsuccessful challenge that led to dice loss
             if dice_lost > 0:
-                reward -= 2.0
+                reward -= 1.0
 
     if action_type == "believe" and believe_success is not None:
         if believe_success:
             # Successfully called believe (caught someone's bluff)
-            reward += 5.0
+            reward += 1.0
         else:
             # Unsuccessful believe that led to dice loss
             if dice_lost > 0:
-                reward -= 2.0
+                reward -= 1.0
 
     # Note: Successful bluff detection (bid that was never challenged) 
     # is handled separately in the environment when round ends
