@@ -107,7 +107,7 @@ class GameSession:
             "current_bid": game_state.current_bid,
             "bid_history": game_state.bid_history,
             "palifico_active": game_state.palifico_active,
-            "pacao_called": game_state.pacao_called,
+            "believe_called": game_state.believe_called,
             "player_dice": player_dice,  # Only human player's dice
             "public_info": public_info,
         }
@@ -248,7 +248,7 @@ class GameSession:
             "current_bid": game_state.current_bid,
             "bid_history": game_state.bid_history,
             "palifico_active": game_state.palifico_active,
-            "pacao_called": game_state.pacao_called,
+            "believe_called": game_state.believe_called,
             "game_over": game_state.game_over,
             "winner": game_state.winner,
         }

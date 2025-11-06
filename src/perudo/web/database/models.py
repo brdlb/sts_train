@@ -51,7 +51,7 @@ class GameAction(Base):
     id = Column(Integer, primary_key=True, index=True)
     game_id = Column(Integer, ForeignKey("games.id"), nullable=False)
     player_id = Column(Integer, nullable=False)
-    action_type = Column(String, nullable=False)  # 'bid', 'challenge', 'pacao'
+    action_type = Column(String, nullable=False)  # 'bid', 'challenge', 'believe'
     action_data = Column(JSON, nullable=True)  # Additional action data (e.g., quantity, value for bid)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     turn_number = Column(Integer, nullable=False)  # Turn number in the game

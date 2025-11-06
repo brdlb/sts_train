@@ -43,7 +43,7 @@ def get_action_space_size(max_players: int = 6, max_quantity: int = 30) -> int:
 
     Actions:
     - 0: challenge
-    - 1: pacao
+    - 1: believe
     - 2+: bids (quantity, value) encoded as encode_bid(quantity, value)
 
     Args:
@@ -53,7 +53,7 @@ def get_action_space_size(max_players: int = 6, max_quantity: int = 30) -> int:
     Returns:
         Action space size
     """
-    # 2 special actions (challenge, pacao) + all possible bids
+    # 2 special actions (challenge, believe) + all possible bids
     bid_actions = max_quantity * 6  # Maximum 30 * 6 = 180 bids
     return 2 + bid_actions
 
@@ -68,12 +68,12 @@ def action_to_bid(action: int, max_quantity: int = 30) -> Tuple[str, Optional[in
 
     Returns:
         Tuple (action_type, param1, param2)
-        Types: 'challenge', 'pacao', 'bid'
+        Types: 'challenge', 'believe', 'bid'
     """
     if action == 0:
         return ("challenge", None, None)
     elif action == 1:
-        return ("pacao", None, None)
+        return ("believe", None, None)
     else:
         # Actions 2+ are bids
         bid_encoded = action - 2
@@ -94,7 +94,7 @@ def bid_to_action(quantity: int, value: int, max_quantity: int = 30) -> int:
         Action in action_space
     """
     encoded = encode_bid(quantity, value, max_quantity)
-    return 2 + encoded  # Offset by 2 (challenge and pacao)
+    return 2 + encoded  # Offset by 2 (challenge and believe)
 
 
 def create_observation_dict(
@@ -103,7 +103,7 @@ def create_observation_dict(
     player_dice_count: List[int],
     current_player: int,
     palifico_active: List[bool],
-    pacao_called: bool,
+    believe_called: bool,
     player_dice: List[int],  # Current player's dice (visible only to them)
     max_history_length: int = 20,
     max_players: int = 6,
@@ -119,7 +119,7 @@ def create_observation_dict(
         player_dice_count: Number of dice for each player
         current_player: Current player
         palifico_active: Palifico flags for each player
-        pacao_called: Pacao call flag
+        believe_called: Believe call flag
         player_dice: Current player's dice
         max_history_length: Maximum length of bid history sequence
         max_players: Maximum number of players
@@ -128,15 +128,18 @@ def create_observation_dict(
     
     Returns:
         Dictionary with 'bid_history' and 'static_info' keys
+        bid_history shape: (max_history_length, 3) - (player_id, quantity, value)
     """
-    # Build bid_history sequence (max_history_length, 2) - only quantity and value
-    bid_history_array = np.zeros((max_history_length, 2), dtype=np.int32)
+    # Build bid_history sequence (max_history_length, 3) - player_id, quantity, value
+    # This preserves information about who made each bid, which is crucial for understanding
+    # player strategies and turn order context
+    bid_history_array = np.zeros((max_history_length, 3), dtype=np.int32)
     for i in range(max_history_length):
         # Take from end of history (most recent first)
         history_idx = len(bid_history) - 1 - i
         if history_idx >= 0:
-            _, quantity, value = bid_history[history_idx]
-            bid_history_array[i] = [quantity, value]
+            player_id, quantity, value = bid_history[history_idx]
+            bid_history_array[i] = [player_id, quantity, value]
         # else: padding (already zeros)
     
     # Build static_info vector
@@ -170,8 +173,8 @@ def create_observation_dict(
     )
     static_parts.append(np.array(palifico_padded[:max_players], dtype=np.float32))
     
-    # Pacao flag (1 value)
-    static_parts.append(np.array([1.0 if pacao_called else 0.0], dtype=np.float32))
+    # Believe flag (1 value)
+    static_parts.append(np.array([1.0 if believe_called else 0.0], dtype=np.float32))
     
     # Current player's dice (5 values, pad with zeros if less)
     dice_padded = player_dice + [0] * (5 - len(player_dice))
@@ -192,7 +195,7 @@ def create_observation_vector(
     player_dice_count: List[int],
     current_player: int,
     palifico_active: List[bool],
-    pacao_called: bool,
+    believe_called: bool,
     player_dice: List[int],  # Current player's dice (visible only to them)
     history_length: int = 10,
     max_players: int = 6,
@@ -208,7 +211,7 @@ def create_observation_vector(
         player_dice_count: Number of dice for each player
         current_player: Current player
         palifico_active: Palifico flags for each player
-        pacao_called: Pacao call flag
+        believe_called: Believe call flag
         player_dice: Current player's dice
         history_length: Bid history length
         max_players: Maximum number of players
@@ -259,8 +262,8 @@ def create_observation_vector(
     )
     obs_parts.append(palifico_padded[:max_players])
 
-    # Pacao flag (1 value)
-    obs_parts.append([1 if pacao_called else 0])
+    # Believe flag (1 value)
+    obs_parts.append([1 if believe_called else 0])
 
     # Current player's dice (5 values, pad with zeros if less)
     dice_padded = player_dice + [0] * (5 - len(player_dice))
@@ -277,19 +280,19 @@ def calculate_reward(
     winner: int,
     player_id: int,
     challenge_success: Optional[bool] = None,
-    pacao_success: Optional[bool] = None,
+    believe_success: Optional[bool] = None,
     dice_lost: int = 0,
 ) -> float:
     """
     Calculate reward for agent.
 
     Args:
-        action_type: Action type ('bid', 'challenge', 'pacao')
+        action_type: Action type ('bid', 'challenge', 'believe')
         game_over: Whether game is over
         winner: Winner ID (if game is over)
         player_id: Current player ID
         challenge_success: Whether challenge succeeded (if applicable)
-        pacao_success: Whether pacao succeeded (if applicable)
+        believe_success: Whether believe succeeded (if applicable)
         dice_lost: Number of dice lost
 
     Returns:
@@ -301,28 +304,28 @@ def calculate_reward(
     if game_over and winner == player_id:
         reward += 250.0
 
-    # Penalty for losing dice (reduced from -10.0 to -6.0 per die)
+    # Penalty for losing dice (reduced from -6.0 to -3.0 per die to balance rewards)
     if dice_lost > 0:
-        reward -= 6.0 * dice_lost
+        reward -= 3.0 * dice_lost
 
     # Intermediate rewards for bluffs and challenges (scaled up)
-    # +2.0 for successful challenge/pacao (increased from +0.5)
-    # -2.0 for unsuccessful challenge/pacao that led to losing a die (increased from -0.5)
+    # +5.0 for successful challenge/believe (increased from +2.0 to encourage risk-taking)
+    # -2.0 for unsuccessful challenge/believe that led to losing a die (kept at -2.0)
     if action_type == "challenge" and challenge_success is not None:
         if challenge_success:
             # Successfully caught someone's bluff
-            reward += 2.0
+            reward += 5.0
         else:
             # Unsuccessful challenge that led to dice loss
             if dice_lost > 0:
                 reward -= 2.0
 
-    if action_type == "pacao" and pacao_success is not None:
-        if pacao_success:
-            # Successfully called pacao (caught someone's bluff)
-            reward += 2.0
+    if action_type == "believe" and believe_success is not None:
+        if believe_success:
+            # Successfully called believe (caught someone's bluff)
+            reward += 5.0
         else:
-            # Unsuccessful pacao that led to dice loss
+            # Unsuccessful believe that led to dice loss
             if dice_lost > 0:
                 reward -= 2.0
 

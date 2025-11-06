@@ -5,9 +5,9 @@ interface BidInputProps {
   maxQuantity: number;
   onBid: (quantity: number, value: number) => void;
   onChallenge: () => void;
-  onPacao: () => void;
+  onBelieve: () => void;
   canChallenge: boolean;
-  canPacao: boolean;
+  canBelieve: boolean;
   disabled: boolean;
 }
 
@@ -16,9 +16,9 @@ export const BidInput: React.FC<BidInputProps> = ({
   maxQuantity,
   onBid,
   onChallenge,
-  onPacao,
+  onBelieve,
   canChallenge,
-  canPacao,
+  canBelieve,
   disabled,
 }) => {
   const [quantity, setQuantity] = useState(1);
@@ -107,19 +107,19 @@ export const BidInput: React.FC<BidInputProps> = ({
           Challenge
         </button>
         <button
-          onClick={onPacao}
-          disabled={!canPacao || disabled}
+          onClick={onBelieve}
+          disabled={!canBelieve || disabled}
           style={{
             padding: '10px 20px',
-            backgroundColor: canPacao && !disabled ? '#FF9800' : '#ccc',
+            backgroundColor: canBelieve && !disabled ? '#FF9800' : '#ccc',
             color: 'white',
             border: 'none',
             borderRadius: '5px',
-            cursor: canPacao && !disabled ? 'pointer' : 'not-allowed',
+            cursor: canBelieve && !disabled ? 'pointer' : 'not-allowed',
             fontSize: '16px',
           }}
         >
-          Pacao (Believe)
+          Believe
         </button>
       </div>
 

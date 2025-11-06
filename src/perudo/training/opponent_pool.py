@@ -120,7 +120,7 @@ class OpponentPool:
             json.dump(data, f, indent=2)
 
     def save_snapshot(
-        self, model: PPO, step: int, prefix: str = "snapshot"
+        self, model: PPO, step: int, prefix: str = "snapshot", force: bool = False
     ) -> Optional[str]:
         """
         Save a snapshot of the current policy.
@@ -129,11 +129,12 @@ class OpponentPool:
             model: PPO model to save
             step: Current training step
             prefix: Prefix for snapshot filename
+            force: If True, ignore snapshot_freq and always save
 
         Returns:
             Path to saved snapshot, or None if not saved
         """
-        if step % self.snapshot_freq != 0:
+        if not force and step % self.snapshot_freq != 0:
             return None
 
         snapshot_id = f"{prefix}_step_{step}"

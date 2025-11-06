@@ -105,9 +105,9 @@ class PerudoRules:
         return True, ""
 
     @staticmethod
-    def can_call_pacao(game_state: GameState, player_id: int) -> Tuple[bool, str]:
+    def can_call_believe(game_state: GameState, player_id: int) -> Tuple[bool, str]:
         """
-        Check if player can call pacao (believe).
+        Check if player can call believe.
 
         According to rules: any player can believe (not just those with 1 die).
 
@@ -116,7 +116,7 @@ class PerudoRules:
             player_id: Player ID
 
         Returns:
-            Tuple (whether can call pacao, error message)
+            Tuple (whether can call believe, error message)
         """
         if game_state.current_player != player_id:
             return False, "Not your turn"
@@ -170,15 +170,15 @@ class PerudoRules:
         return loser, 1
 
     @staticmethod
-    def process_pacao_result(
+    def process_believe_result(
         game_state: GameState,
         caller_id: int,
-        pacao_success: bool,
+        believe_success: bool,
         actual_count: int,
         bid_quantity: int,
     ) -> Tuple[int, int, Optional[int]]:
         """
-        Process pacao (believe) result.
+        Process believe result.
 
         New rules:
         - If dice count exactly equals bid: believer gains die (if < 5) or starts next round (if 5)
@@ -186,8 +186,8 @@ class PerudoRules:
 
         Args:
             game_state: Current game state
-            caller_id: ID of player who called pacao
-            pacao_success: Whether pacao succeeded (True if actual == bid)
+            caller_id: ID of player who called believe
+            believe_success: Whether believe succeeded (True if actual == bid)
             actual_count: Actual dice count
             bid_quantity: Quantity in bid
 
@@ -199,7 +199,7 @@ class PerudoRules:
             return caller_id, 1, None
 
         # If dice exactly equals bid: believer benefits
-        if pacao_success:
+        if believe_success:
             # Believer gains a die if they have less than 5, or starts next round if they have 5
             if game_state.player_dice_count[caller_id] < game_state.dice_per_player:
                 # Gain a die (handled separately in environment)
@@ -224,7 +224,7 @@ class PerudoRules:
 
         Returns:
             List of available actions in format (action_type, param1, param2)
-            Types: 'bid', 'challenge', 'pacao'
+            Types: 'bid', 'challenge', 'believe'
         """
         actions = []
 
@@ -240,10 +240,10 @@ class PerudoRules:
         if can_challenge:
             actions.append(("challenge", None, None))
 
-        # Action: call pacao
-        can_pacao, _ = PerudoRules.can_call_pacao(game_state, player_id)
-        if can_pacao:
-            actions.append(("pacao", None, None))
+        # Action: call believe
+        can_believe, _ = PerudoRules.can_call_believe(game_state, player_id)
+        if can_believe:
+            actions.append(("believe", None, None))
 
         # Actions: bids
         # Generate possible bids

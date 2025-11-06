@@ -84,19 +84,19 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     }
   };
 
-  const handlePacao = async () => {
+  const handleBelieve = async () => {
     if (!gameState || processing) return;
 
     try {
       setProcessing(true);
-      const result = await gamesApi.makeAction(gameId, 1); // 1 = pacao
+      const result = await gamesApi.makeAction(gameId, 1); // 1 = believe
       setGameState(result.state);
 
       if (result.game_over) {
         onGameEnd();
       }
     } catch (err) {
-      setError('Failed to call pacao');
+      setError('Failed to call believe');
       console.error(err);
     } finally {
       setProcessing(false);
@@ -131,7 +131,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   }
 
   const canChallenge = gameState.current_bid !== null && gameState.bid_history.length > 0;
-  const canPacao = gameState.current_bid !== null && !gameState.pacao_called;
+  const canBelieve = gameState.current_bid !== null && !gameState.believe_called;
 
   return (
     <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -175,9 +175,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
           maxQuantity={30}
           onBid={handleBid}
           onChallenge={handleChallenge}
-          onPacao={handlePacao}
+          onBelieve={handleBelieve}
           canChallenge={canChallenge}
-          canPacao={canPacao}
+          canBelieve={canBelieve}
           disabled={processing}
         />
       )}

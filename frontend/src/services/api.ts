@@ -29,7 +29,7 @@ export interface GameState {
   current_bid: [number, number] | null;
   bid_history: Array<[number, number, number]>;
   palifico_active: boolean[];
-  pacao_called: boolean;
+  believe_called: boolean;
   player_dice: {
     bid_history: number[][];
     static_info: number[];

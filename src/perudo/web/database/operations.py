@@ -95,7 +95,7 @@ def add_action(
         db: Database session
         game_id: Game ID
         player_id: Player ID
-        action_type: Action type ('bid', 'challenge', 'pacao')
+        action_type: Action type ('bid', 'challenge', 'believe')
         action_data: Additional action data
         turn_number: Turn number
 

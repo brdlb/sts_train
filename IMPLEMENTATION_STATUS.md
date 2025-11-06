@@ -16,7 +16,7 @@
 **Games API** (`src/perudo/web/api/games.py`):
 - ✅ `POST /api/games/create` - создание игры с выбором 3 моделей для ИИ-агентов
 - ✅ `GET /api/games/{game_id}` - получение состояния игры
-- ✅ `POST /api/games/{game_id}/action` - выполнение действия (bid/challenge/pacao)
+- ✅ `POST /api/games/{game_id}/action` - выполнение действия (bid/challenge/believe)
 - ✅ `GET /api/games/{game_id}/history` - получение истории ходов
 - ✅ `GET /api/games` - список игр с фильтрацией
 
@@ -93,7 +93,7 @@
 
 **BidInput.tsx**:
 - ✅ Выбор количества и значения
-- ✅ Кнопки для challenge и pacao
+- ✅ Кнопки для challenge и believe
 - ✅ Валидация действий
 - ✅ Блокировка интерфейса во время хода ИИ
 

@@ -161,14 +161,18 @@ class SelfPlayTrainingCallback(BaseCallback):
         opponent_pool: OpponentPool,
         snapshot_freq: int = 50000,
         verbose: int = 0,
-        debug: bool = False
+        debug: bool = False,
+        save_snapshot_every_cycle: bool = True
     ):
         super().__init__(verbose)
         self.opponent_pool = opponent_pool
         self.snapshot_freq = snapshot_freq
         self.debug = debug
+        self.save_snapshot_every_cycle = save_snapshot_every_cycle
         self.current_step = 0
         self.vec_env = None
+        # Флаг для отслеживания, когда нужно сохранить снапшот после обновления модели
+        self._pending_snapshot = False
         # Буферы для статистики
         self.episode_rewards = []
         self.episode_lengths = []
@@ -193,19 +197,43 @@ class SelfPlayTrainingCallback(BaseCallback):
     def _on_step(self) -> bool:
         self.current_step += 1
         
+        # Сохраняем снапшот после обновления модели (если был установлен флаг в _on_rollout_end)
+        if self.save_snapshot_every_cycle and self._pending_snapshot:
+            # Get current step from model (num_timesteps) - модель уже обновлена
+            current_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
+            self.opponent_pool.save_snapshot(
+                self.model,
+                current_step,
+                prefix="snapshot",
+                force=True  # Force save regardless of snapshot_freq
+            )
+            if self.verbose > 0:
+                print(f"Saved snapshot after training cycle (step {current_step})")
+            self._pending_snapshot = False
+        
         # Собираем episode_info из infos всех env (SB3 их передаёт в self.locals["infos"])
         infos = self.locals.get("infos", [])
         for info in infos:
             # Добавляем статистику только если эпизод завершен (info содержит episode_reward)
             if isinstance(info, dict) and "episode_reward" in info:
+                # Get episode information
+                episode_reward = info["episode_reward"]
+                episode_length = info["episode_length"]
+                
+                # Get winner from info or episode dict (both formats are supported)
+                episode_dict = info.get("episode", {})
+                winner = info.get("winner", episode_dict.get("winner", -1))
+                
                 with self._lock:
-                    self.episode_rewards.append(info["episode_reward"])
-                    self.episode_lengths.append(info["episode_length"])
-                    win = 1 if info.get("winner", -1) == 0 else 0
+                    self.episode_rewards.append(episode_reward)
+                    self.episode_lengths.append(episode_length)
+                    win = 1 if winner == 0 else 0
                     self.episode_wins.append(win)
         
-        # Стандартная логика снапшотов и синхронизации
-        if self.current_step % self.snapshot_freq == 0:
+        # Стандартная логика снапшотов по частоте шагов (опционально, для обратной совместимости)
+        # Основное сохранение происходит после каждого цикла обучения через _pending_snapshot
+        # Эта логика может быть отключена, если save_snapshot_every_cycle=True
+        if not self.save_snapshot_every_cycle and self.current_step % self.snapshot_freq == 0:
             self.opponent_pool.save_snapshot(
                 self.model,
                 self.current_step,
@@ -235,6 +263,18 @@ class SelfPlayTrainingCallback(BaseCallback):
         return True
     
     def _on_rollout_end(self) -> bool:
+        """
+        Called after each training cycle (after collecting n_steps, before model update).
+        Set flag to save snapshot after model update in next _on_step().
+        
+        Note: In SB3, this callback is called after collecting n_steps of data,
+        but before the model update. We set a flag here and save the snapshot
+        in the next _on_step() call, which happens after the model update.
+        """
+        # Set flag to save snapshot after model update (in next _on_step())
+        if self.save_snapshot_every_cycle:
+            self._pending_snapshot = True
+        
         # Winrate statistics are updated in VecEnv.step_wait() when episodes end
         return True
 
@@ -290,6 +330,9 @@ class SelfPlayTraining:
             history_length=config.game.history_length,
             max_history_length=max_history_length,
             opponent_pool=self.opponent_pool,
+            random_num_players=config.game.random_num_players,
+            min_players=config.game.min_players,
+            max_players=config.game.max_players,
         )
         
         # Wrap with VecMonitor for CSV logging of episode statistics
@@ -353,6 +396,7 @@ class SelfPlayTraining:
                         dim_feedforward=config.training.transformer_dim_feedforward,
                         max_history_length=config.training.transformer_history_length,
                         max_quantity=config.game.max_quantity,
+                        dropout=getattr(config.training, 'transformer_dropout', 0.1),
                     ),
                 )
             else:
@@ -475,12 +519,6 @@ def main():
         help="Path to configuration file (JSON)",
     )
     parser.add_argument(
-        "--num-players",
-        type=int,
-        default=4,
-        help="Number of players per table",
-    )
-    parser.add_argument(
         "--num-envs",
         type=int,
         default=None,
@@ -515,7 +553,6 @@ def main():
     
     # Create configuration
     config = DEFAULT_CONFIG
-    config.game.num_players = args.num_players
     config.training.total_timesteps = args.total_timesteps
     config.training.n_steps = args.n_steps
     config.training.batch_size = args.batch_size
