@@ -267,12 +267,15 @@ class SelfPlayTraining:
         
         # Create opponent pool directory
         pool_dir = os.path.join(config.training.model_dir, "opponent_pool")
+        # Use CPU for opponent models to avoid GPU overhead from single-observation predictions
+        opponent_device = getattr(config.training, 'opponent_device', 'cpu')
         self.opponent_pool = OpponentPool(
             pool_dir=pool_dir,
             max_pool_size=20,
             min_pool_size=10,
             keep_best=3,
             snapshot_freq=50000,
+            opponent_device=opponent_device,
         )
         
         # Create vectorized environment

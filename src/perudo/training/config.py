@@ -25,9 +25,10 @@ class TrainingConfig:
     policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
+    opponent_device: Optional[str] = "cpu"  # Device for opponent models (CPU recommended to avoid GPU overhead)
     learning_rate: float = 1.5e-4  # Reduced for stability (prevents catastrophic forgetting)
     n_steps: int = 1024  # Increased for more stable updates (was 512, too small)
-    batch_size: int = 128
+    batch_size: int = 256  # Increased for better GPU utilization
     n_epochs: int = 6  # Increased to better train value function (was 4)
     gamma: float = 0.95
     gae_lambda: float = 0.95
@@ -45,7 +46,7 @@ class TrainingConfig:
     transformer_history_length: int = 20
 
     # Training parameters
-    num_envs: int = 2  # Number of parallel environments (tables)
+    num_envs: int = 128  # Number of parallel environments (tables)
     total_timesteps: int = 10_000_000
     save_freq: int = 100_000  # Save model every N steps
     eval_freq: int = 50_000  # Evaluate model every N steps
