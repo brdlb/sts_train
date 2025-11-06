@@ -793,9 +793,10 @@ class PerudoEnv(gym.Env):
             reward += 0.5 * min(dice_advantage, 5.0)  # Cap at 5 dice advantage
         
         # Bonus reward for being leader (having more dice than all opponents)
-        max_opponent_dice = max(opponent_dice_counts)
-        if agent_dice > max_opponent_dice:
-            # Additional +2.0 reward for being the leader
-            reward += 2.0
+        if opponent_dice_counts:
+            max_opponent_dice = max(opponent_dice_counts)
+            if agent_dice > max_opponent_dice:
+                # Additional +2.0 reward for being the leader
+                reward += 2.0
         
         return reward
