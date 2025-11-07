@@ -300,36 +300,64 @@ def calculate_reward(
     """
     reward = 0.0
 
-    # Reward for winning game (increased from 100.0 to 250.0)
+    # Reward for winning game
     if game_over and winner == player_id:
-        reward += 250.0
+        reward += 10.0
 
-    # Penalty for losing dice (reduced from -6.0 to -3.0 per die to balance rewards)
+    # Penalty for losing dice
     if dice_lost > 0:
-        reward -= 3.0 * dice_lost
+        reward -= 2.0 * dice_lost
 
-    # Intermediate rewards for bluffs and challenges (scaled up)
-    # +5.0 for successful challenge/believe (increased from +2.0 to encourage risk-taking)
-    # -2.0 for unsuccessful challenge/believe that led to losing a die (kept at -2.0)
+    # Intermediate rewards for bluffs and challenges
     if action_type == "challenge" and challenge_success is not None:
         if challenge_success:
             # Successfully caught someone's bluff
-            reward += 5.0
+            reward += 1.0
         else:
             # Unsuccessful challenge that led to dice loss
             if dice_lost > 0:
-                reward -= 2.0
+                reward -= 1.0
 
     if action_type == "believe" and believe_success is not None:
         if believe_success:
             # Successfully called believe (caught someone's bluff)
-            reward += 5.0
+            reward += 1.0
         else:
             # Unsuccessful believe that led to dice loss
             if dice_lost > 0:
-                reward -= 2.0
+                reward -= 1.0
 
     # Note: Successful bluff detection (bid that was never challenged) 
     # is handled separately in the environment when round ends
 
     return reward
+
+
+def create_action_mask(
+    available_actions: List[Tuple[str, Optional[int], Optional[int]]],
+    action_space_size: int,
+    max_quantity: int = 30,
+) -> np.ndarray:
+    """
+    Create a boolean mask for available actions.
+
+    Args:
+        available_actions: List of available actions from PerudoRules.get_available_actions
+        action_space_size: Total size of the action space
+        max_quantity: Maximum dice quantity in bid
+
+    Returns:
+        Boolean numpy array where True means the action is available.
+    """
+    mask = np.zeros(action_space_size, dtype=bool)
+    for action_type, param1, param2 in available_actions:
+        if action_type == "challenge":
+            mask[0] = True
+        elif action_type == "believe":
+            mask[1] = True
+        elif action_type == "bid":
+            quantity, value = param1, param2
+            action_idx = bid_to_action(quantity, value, max_quantity)
+            if 0 <= action_idx < action_space_size:
+                mask[action_idx] = True
+    return mask

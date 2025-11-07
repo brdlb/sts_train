@@ -22,9 +22,11 @@ def test_env_reset():
     env = PerudoEnv(num_players=2, dice_per_player=5)
     obs, info = env.reset()
     
-    assert isinstance(obs, np.ndarray)
-    assert obs.dtype == np.float32
-    assert len(obs) > 0
+    assert isinstance(obs, dict)
+    assert "bid_history" in obs
+    assert "static_info" in obs
+    assert obs['bid_history'].dtype == np.int32
+    assert obs['static_info'].dtype == np.float32
     assert "player_id" in info
     assert "game_state" in info
 
@@ -40,7 +42,9 @@ def test_env_step():
     # Execute action
     next_obs, reward, terminated, truncated, info = env.step(action)
     
-    assert isinstance(next_obs, np.ndarray)
+    assert isinstance(next_obs, dict)
+    assert "bid_history" in next_obs
+    assert "static_info" in next_obs
     assert isinstance(reward, (int, float))
     assert isinstance(terminated, bool)
     assert isinstance(truncated, bool)
@@ -52,10 +56,20 @@ def test_env_observation_shape():
     env = PerudoEnv(num_players=2, dice_per_player=5, history_length=10)
     obs, _ = env.reset()
     
-    # New format: agent_id(num_players) + current_bid(2) + history(history_length*3) +
+    assert obs['bid_history'].shape == (10, 3)
+    # New format: agent_id(num_players) + current_bid(2) +
     # dice_count(num_players) + current_player(1) + palifico(num_players) + believe(1) + player_dice(5)
-    expected_size = 2 + 2 + 10 * 3 + 2 + 1 + 2 + 1 + 5
-    assert obs.shape == (expected_size,)
+    # total for num_players=8 is 8 + 2 + 8 + 1 + 8 + 1 + 5 = 33
+    static_info_size = (
+            8  # agent_id one-hot
+            + 2  # current_bid (quantity, value)
+            + 8  # dice_count
+            + 1  # current_player
+            + 8  # palifico
+            + 1  # believe
+            + 5  # player_dice
+        )
+    assert obs['static_info'].shape == (static_info_size,)
 
 
 def test_env_action_space():
@@ -90,8 +104,9 @@ def test_env_set_active_player():
     # Get observation for them
     obs = env.get_observation_for_player(2)
     
-    assert isinstance(obs, np.ndarray)
-    assert len(obs) > 0
+    assert isinstance(obs, dict)
+    assert "bid_history" in obs
+    assert "static_info" in obs
 
 
 def test_agent_id_in_observation():
@@ -113,26 +128,26 @@ def test_agent_id_in_observation():
     obs_3 = env.get_observation_for_player(3)
     
     # Check that agent_id one-hot encoding is correct
-    # First 4 values should be agent_id one-hot
-    assert obs_0[0] == 1.0  # Agent 0
-    assert obs_0[1] == 0.0
-    assert obs_0[2] == 0.0
-    assert obs_0[3] == 0.0
+    # First 4 values of static_info should be agent_id one-hot
+    assert obs_0['static_info'][0] == 1.0  # Agent 0
+    assert obs_0['static_info'][1] == 0.0
+    assert obs_0['static_info'][2] == 0.0
+    assert obs_0['static_info'][3] == 0.0
     
-    assert obs_1[0] == 0.0
-    assert obs_1[1] == 1.0  # Agent 1
-    assert obs_1[2] == 0.0
-    assert obs_1[3] == 0.0
+    assert obs_1['static_info'][0] == 0.0
+    assert obs_1['static_info'][1] == 1.0  # Agent 1
+    assert obs_1['static_info'][2] == 0.0
+    assert obs_1['static_info'][3] == 0.0
     
-    assert obs_2[0] == 0.0
-    assert obs_2[1] == 0.0
-    assert obs_2[2] == 1.0  # Agent 2
-    assert obs_2[3] == 0.0
+    assert obs_2['static_info'][0] == 0.0
+    assert obs_2['static_info'][1] == 0.0
+    assert obs_2['static_info'][2] == 1.0  # Agent 2
+    assert obs_2['static_info'][3] == 0.0
     
-    assert obs_3[0] == 0.0
-    assert obs_3[1] == 0.0
-    assert obs_3[2] == 0.0
-    assert obs_3[3] == 1.0  # Agent 3
+    assert obs_3['static_info'][0] == 0.0
+    assert obs_3['static_info'][1] == 0.0
+    assert obs_3['static_info'][2] == 0.0
+    assert obs_3['static_info'][3] == 1.0  # Agent 3
 
 
 def test_env_game_over():
@@ -218,4 +233,3 @@ def test_next_round_starts_with_player_who_lost_die_in_believe():
     # Player 1 (believer) should lose die and start next round
     assert env.game_state.current_player == 1
     assert env.game_state.player_dice_count[1] == 4  # Lost one die
-

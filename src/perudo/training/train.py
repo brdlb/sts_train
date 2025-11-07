@@ -10,7 +10,7 @@ import contextlib
 from io import StringIO
 import numpy as np
 from typing import List, Optional
-from stable_baselines3 import PPO
+from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
 from stable_baselines3.common.vec_env import VecNormalize, VecMonitor
 
@@ -358,7 +358,7 @@ class SelfPlayTraining:
             try:
                 # Suppress SB3 wrapping messages
                 with contextlib.redirect_stdout(StringIO()):
-                    self.model = PPO.load(latest_model_path, env=self.vec_env)
+                    self.model = MaskablePPO.load(latest_model_path, env=self.vec_env)
                 # Enable TensorBoard logging for loaded model
                 self.model.tensorboard_log = config.training.log_dir
                 print(f"Successfully loaded model from {latest_model_path}")
@@ -402,7 +402,7 @@ class SelfPlayTraining:
             else:
                 policy_kwargs = config.training.policy_kwargs
             
-            self.model = PPO(
+            self.model = MaskablePPO(
                 policy=config.training.policy,
                 env=self.vec_env,
                 device=device,

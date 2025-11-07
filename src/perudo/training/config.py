@@ -29,14 +29,14 @@ class TrainingConfig:
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     opponent_device: Optional[str] = "cpu"  # Device for opponent models (CPU recommended to avoid GPU overhead)
-    learning_rate: float = 2.0e-4  # Increased (fewer params + LayerNorm allow higher LR)
+    learning_rate: float = 3.0e-4  # Increased (fewer params + LayerNorm allow higher LR)
     n_steps: int = 2048  # Steps to collect before update (for 1 env, 4 players: effective batch = 8192)
     batch_size: int = 256  # Adjusted for 1 env, 4 players: effective batch = 8192, resulting in 32 mini-batches
-    n_epochs: int = 8  # Increased for better data utilization with smaller effective batch
+    n_epochs: int = 10  # Increased for better data utilization with smaller effective batch
     gamma: float = 0.95
     gae_lambda: float = 0.95
-    clip_range: float = 0.12  # Reduced (more conservative for 3-layer transformer)
-    ent_coef: float = 0.02  # Increased to prevent premature convergence (was 0.01)
+    clip_range: float = 0.2  # Reduced (more conservative for 3-layer transformer)
+    ent_coef: float = 0.01  # Increased to prevent premature convergence (was 0.01)
     vf_coef: float = 0.75  # Increased to better train value function (was 0.5)
     max_grad_norm: float = 0.3  # Reduced (stricter clipping for deeper 3-layer network)
     

@@ -10,7 +10,29 @@ from src.perudo.utils.helpers import (
     decode_bid,
     action_to_bid,
     bid_to_action,
+    create_action_mask,
 )
+
+
+def test_create_action_mask():
+    """Test creating action mask."""
+    available_actions = [
+        ("challenge", None, None),
+        ("believe", None, None),
+        ("bid", 1, 2),
+        ("bid", 1, 3),
+    ]
+    action_space_size = 2 + 30 * 6
+    mask = create_action_mask(available_actions, action_space_size)
+
+    assert mask[0] == True  # challenge
+    assert mask[1] == True  # believe
+    action_idx = bid_to_action(1, 2)
+    assert mask[action_idx] == True
+    action_idx = bid_to_action(1, 3)
+    assert mask[action_idx] == True
+    action_idx = bid_to_action(1, 4)
+    assert mask[action_idx] == False
 
 
 def test_create_observation_vector_with_agent_id():
