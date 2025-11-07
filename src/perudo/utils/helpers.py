@@ -331,3 +331,33 @@ def calculate_reward(
     # is handled separately in the environment when round ends
 
     return reward
+
+
+def create_action_mask(
+    available_actions: List[Tuple[str, Optional[int], Optional[int]]],
+    action_space_size: int,
+    max_quantity: int = 30,
+) -> np.ndarray:
+    """
+    Create a boolean mask for available actions.
+
+    Args:
+        available_actions: List of available actions from PerudoRules.get_available_actions
+        action_space_size: Total size of the action space
+        max_quantity: Maximum dice quantity in bid
+
+    Returns:
+        Boolean numpy array where True means the action is available.
+    """
+    mask = np.zeros(action_space_size, dtype=bool)
+    for action_type, param1, param2 in available_actions:
+        if action_type == "challenge":
+            mask[0] = True
+        elif action_type == "believe":
+            mask[1] = True
+        elif action_type == "bid":
+            quantity, value = param1, param2
+            action_idx = bid_to_action(quantity, value, max_quantity)
+            if 0 <= action_idx < action_space_size:
+                mask[action_idx] = True
+    return mask
