@@ -37,9 +37,13 @@ def test_vec_env_reset():
     
     obs = vec_env.reset()
     
-    assert isinstance(obs, np.ndarray)
-    assert obs.shape == (2, obs.shape[1])  # 2 environments
-    assert obs.dtype == np.float32
+    assert isinstance(obs, dict)
+    assert "bid_history" in obs
+    assert "static_info" in obs
+    assert obs['bid_history'].shape[0] == 2
+    assert obs['static_info'].shape[0] == 2
+    assert obs['bid_history'].dtype == np.int32
+    assert obs['static_info'].dtype == np.float32
 
 
 def test_vec_env_step():
@@ -58,8 +62,11 @@ def test_vec_env_step():
     # Step environments
     next_obs, rewards, dones, infos = vec_env.step(actions)
     
-    assert isinstance(next_obs, np.ndarray)
-    assert next_obs.shape == (2, next_obs.shape[1])
+    assert isinstance(next_obs, dict)
+    assert "bid_history" in next_obs
+    assert "static_info" in next_obs
+    assert next_obs['bid_history'].shape[0] == 2
+    assert next_obs['static_info'].shape[0] == 2
     assert isinstance(rewards, np.ndarray)
     assert rewards.shape == (2,)
     assert isinstance(dones, np.ndarray)
@@ -91,12 +98,14 @@ def test_vec_env_with_opponent_pool():
         # Reset should sample opponents
         obs = vec_env.reset()
         
-        assert isinstance(obs, np.ndarray)
-        assert obs.shape[0] == 2
+        assert isinstance(obs, dict)
+        assert "bid_history" in obs
+        assert "static_info" in obs
+        assert obs['bid_history'].shape[0] == 2
+        assert obs['static_info'].shape[0] == 2
         
         # Check that opponent models are set
         assert len(vec_env.opponent_models) == 2
-        assert len(vec_env.opponent_models[0]) == 3  # 3 opponents (agents 1, 2, 3)
         
     finally:
         # Clean up
@@ -161,7 +170,7 @@ def test_vec_env_get_attr():
     # Get num_players attribute
     num_players = vec_env.get_attr("num_players")
     assert len(num_players) == 2
-    assert all(n == 4 for n in num_players)
+    assert all(n >= 3 and n <= 8 for n in num_players)
 
 
 def test_vec_env_set_attr():
@@ -178,4 +187,3 @@ def test_vec_env_set_attr():
     # Verify it was set
     render_modes = vec_env.get_attr("render_mode")
     assert all(m == "human" for m in render_modes)
-

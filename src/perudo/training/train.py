@@ -10,13 +10,14 @@ import contextlib
 from io import StringIO
 import numpy as np
 from typing import List, Optional
-from stable_baselines3 import PPO
+from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
 from stable_baselines3.common.vec_env import VecNormalize, VecMonitor
 
 from ..game.perudo_vec_env import PerudoMultiAgentVecEnv
 from .config import Config, DEFAULT_CONFIG
 from .opponent_pool import OpponentPool
+from ..agents.transformer_extractor import TransformerFeaturesExtractor
 
 import sys
 import torch
@@ -160,14 +161,18 @@ class SelfPlayTrainingCallback(BaseCallback):
         opponent_pool: OpponentPool,
         snapshot_freq: int = 50000,
         verbose: int = 0,
-        debug: bool = False
+        debug: bool = False,
+        save_snapshot_every_cycle: bool = True
     ):
         super().__init__(verbose)
         self.opponent_pool = opponent_pool
         self.snapshot_freq = snapshot_freq
         self.debug = debug
+        self.save_snapshot_every_cycle = save_snapshot_every_cycle
         self.current_step = 0
         self.vec_env = None
+        # Флаг для отслеживания, когда нужно сохранить снапшот после обновления модели
+        self._pending_snapshot = False
         # Буферы для статистики
         self.episode_rewards = []
         self.episode_lengths = []
@@ -192,19 +197,43 @@ class SelfPlayTrainingCallback(BaseCallback):
     def _on_step(self) -> bool:
         self.current_step += 1
         
+        # Сохраняем снапшот после обновления модели (если был установлен флаг в _on_rollout_end)
+        if self.save_snapshot_every_cycle and self._pending_snapshot:
+            # Get current step from model (num_timesteps) - модель уже обновлена
+            current_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
+            self.opponent_pool.save_snapshot(
+                self.model,
+                current_step,
+                prefix="snapshot",
+                force=True  # Force save regardless of snapshot_freq
+            )
+            if self.verbose > 0:
+                print(f"Saved snapshot after training cycle (step {current_step})")
+            self._pending_snapshot = False
+        
         # Собираем episode_info из infos всех env (SB3 их передаёт в self.locals["infos"])
         infos = self.locals.get("infos", [])
         for info in infos:
             # Добавляем статистику только если эпизод завершен (info содержит episode_reward)
             if isinstance(info, dict) and "episode_reward" in info:
+                # Get episode information
+                episode_reward = info["episode_reward"]
+                episode_length = info["episode_length"]
+                
+                # Get winner from info or episode dict (both formats are supported)
+                episode_dict = info.get("episode", {})
+                winner = info.get("winner", episode_dict.get("winner", -1))
+                
                 with self._lock:
-                    self.episode_rewards.append(info["episode_reward"])
-                    self.episode_lengths.append(info["episode_length"])
-                    win = 1 if info.get("winner", -1) == 0 else 0
+                    self.episode_rewards.append(episode_reward)
+                    self.episode_lengths.append(episode_length)
+                    win = 1 if winner == 0 else 0
                     self.episode_wins.append(win)
         
-        # Стандартная логика снапшотов и синхронизации
-        if self.current_step % self.snapshot_freq == 0:
+        # Стандартная логика снапшотов по частоте шагов (опционально, для обратной совместимости)
+        # Основное сохранение происходит после каждого цикла обучения через _pending_snapshot
+        # Эта логика может быть отключена, если save_snapshot_every_cycle=True
+        if not self.save_snapshot_every_cycle and self.current_step % self.snapshot_freq == 0:
             self.opponent_pool.save_snapshot(
                 self.model,
                 self.current_step,
@@ -234,6 +263,18 @@ class SelfPlayTrainingCallback(BaseCallback):
         return True
     
     def _on_rollout_end(self) -> bool:
+        """
+        Called after each training cycle (after collecting n_steps, before model update).
+        Set flag to save snapshot after model update in next _on_step().
+        
+        Note: In SB3, this callback is called after collecting n_steps of data,
+        but before the model update. We set a flag here and save the snapshot
+        in the next _on_step() call, which happens after the model update.
+        """
+        # Set flag to save snapshot after model update (in next _on_step())
+        if self.save_snapshot_every_cycle:
+            self._pending_snapshot = True
+        
         # Winrate statistics are updated in VecEnv.step_wait() when episodes end
         return True
 
@@ -258,7 +299,7 @@ class SelfPlayTraining:
         """
         self.config = config
         self.num_players = config.game.num_players
-        self.num_envs = 8
+        self.num_envs = config.training.num_envs
         
         # Create directories
         os.makedirs(config.training.log_dir, exist_ok=True)
@@ -266,15 +307,20 @@ class SelfPlayTraining:
         
         # Create opponent pool directory
         pool_dir = os.path.join(config.training.model_dir, "opponent_pool")
+        # Use CPU for opponent models to avoid GPU overhead from single-observation predictions
+        opponent_device = getattr(config.training, 'opponent_device', 'cpu')
         self.opponent_pool = OpponentPool(
             pool_dir=pool_dir,
             max_pool_size=20,
             min_pool_size=10,
             keep_best=3,
             snapshot_freq=50000,
+            opponent_device=opponent_device,
         )
         
         # Create vectorized environment
+        # Use transformer_history_length from config if available, otherwise use history_length
+        max_history_length = getattr(config.training, 'transformer_history_length', config.game.history_length)
         vec_env_raw = PerudoMultiAgentVecEnv(
             num_envs=self.num_envs,
             num_players=self.num_players,
@@ -282,7 +328,11 @@ class SelfPlayTraining:
             total_dice_values=config.game.total_dice_values,
             max_quantity=config.game.max_quantity,
             history_length=config.game.history_length,
+            max_history_length=max_history_length,
             opponent_pool=self.opponent_pool,
+            random_num_players=config.game.random_num_players,
+            min_players=config.game.min_players,
+            max_players=config.game.max_players,
         )
         
         # Wrap with VecMonitor for CSV logging of episode statistics
@@ -308,7 +358,7 @@ class SelfPlayTraining:
             try:
                 # Suppress SB3 wrapping messages
                 with contextlib.redirect_stdout(StringIO()):
-                    self.model = PPO.load(latest_model_path, env=self.vec_env)
+                    self.model = MaskablePPO.load(latest_model_path, env=self.vec_env)
                 # Enable TensorBoard logging for loaded model
                 self.model.tensorboard_log = config.training.log_dir
                 print(f"Successfully loaded model from {latest_model_path}")
@@ -329,11 +379,34 @@ class SelfPlayTraining:
             # One model for all agents (agent_id is in observation)
             # verbose=1 enables built-in progress bar showing timesteps and episode rewards
             print("Creating new model from scratch...")
-            self.model = PPO(
+            
+            # Build policy_kwargs with transformer extractor if not provided
+            if config.training.policy_kwargs is None:
+                # Get observation space from environment
+                obs_space = self.vec_env.observation_space
+                
+                # Create policy_kwargs with transformer extractor
+                policy_kwargs = dict(
+                    features_extractor_class=TransformerFeaturesExtractor,
+                    features_extractor_kwargs=dict(
+                        features_dim=config.training.transformer_features_dim,
+                        num_layers=config.training.transformer_num_layers,
+                        num_heads=config.training.transformer_num_heads,
+                        embed_dim=config.training.transformer_embed_dim,
+                        dim_feedforward=config.training.transformer_dim_feedforward,
+                        max_history_length=config.training.transformer_history_length,
+                        max_quantity=config.game.max_quantity,
+                        dropout=getattr(config.training, 'transformer_dropout', 0.1),
+                    ),
+                )
+            else:
+                policy_kwargs = config.training.policy_kwargs
+            
+            self.model = MaskablePPO(
                 policy=config.training.policy,
                 env=self.vec_env,
                 device=device,
-                policy_kwargs=config.training.policy_kwargs,
+                policy_kwargs=policy_kwargs,
                 learning_rate=config.training.learning_rate,
                 n_steps=config.training.n_steps,
                 batch_size=config.training.batch_size,
@@ -446,16 +519,10 @@ def main():
         help="Path to configuration file (JSON)",
     )
     parser.add_argument(
-        "--num-players",
-        type=int,
-        default=4,
-        help="Number of players per table",
-    )
-    parser.add_argument(
         "--num-envs",
         type=int,
-        default=8,
-        help="Number of parallel environments (tables)",
+        default=None,
+        help="Number of parallel environments (tables). If not specified, uses value from config.",
     )
     parser.add_argument(
         "--total-timesteps",
@@ -486,16 +553,13 @@ def main():
     
     # Create configuration
     config = DEFAULT_CONFIG
-    config.game.num_players = args.num_players
     config.training.total_timesteps = args.total_timesteps
     config.training.n_steps = args.n_steps
     config.training.batch_size = args.batch_size
     config.training.device = args.device
     
-    # Add num_envs to config
-    if not hasattr(config.training, 'num_envs'):
-        config.training.num_envs = args.num_envs
-    else:
+    # Override num_envs from command line if provided
+    if args.num_envs is not None:
         config.training.num_envs = args.num_envs
     
     # Start training

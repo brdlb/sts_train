@@ -54,7 +54,7 @@ def test_save_snapshot():
         # Create a dummy PPO model
         env = PerudoEnv(num_players=4)
         vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MlpPolicy", vec_env, verbose=0)
+        model = PPO("MultiInputPolicy", vec_env, verbose=0)
         
         # Save snapshot at step that doesn't match freq
         snapshot_path = pool.save_snapshot(model, step=50)
@@ -90,7 +90,7 @@ def test_sample_opponent():
         # Create dummy snapshots
         env = PerudoEnv(num_players=4)
         vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MlpPolicy", vec_env, verbose=0)
+        model = PPO("MultiInputPolicy", vec_env, verbose=0)
         
         # Save a few snapshots
         for step in [1, 2, 3]:
@@ -124,7 +124,7 @@ def test_update_winrate():
         # Create dummy snapshot
         env = PerudoEnv(num_players=4)
         vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MlpPolicy", vec_env, verbose=0)
+        model = PPO("MultiInputPolicy", vec_env, verbose=0)
         
         snapshot_path = pool.save_snapshot(model, step=1)
         
@@ -192,7 +192,7 @@ def test_cleanup_snapshots():
         # Create dummy snapshots
         env = PerudoEnv(num_players=4)
         vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MlpPolicy", vec_env, verbose=0)
+        model = PPO("MultiInputPolicy", vec_env, verbose=0)
         
         # Save more snapshots than max_pool_size
         for step in range(1, 10):
@@ -222,7 +222,7 @@ def test_load_snapshot():
         # Create and save snapshot
         env = PerudoEnv(num_players=4)
         vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MlpPolicy", vec_env, verbose=0)
+        model = PPO("MultiInputPolicy", vec_env, verbose=0)
         
         snapshot_path = pool.save_snapshot(model, step=1)
         
@@ -255,7 +255,7 @@ def test_get_best_snapshot():
         # Create dummy snapshots
         env = PerudoEnv(num_players=4)
         vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MlpPolicy", vec_env, verbose=0)
+        model = PPO("MultiInputPolicy", vec_env, verbose=0)
         
         # Save a few snapshots
         snapshot_paths = []
@@ -280,4 +280,3 @@ def test_get_best_snapshot():
         
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
-

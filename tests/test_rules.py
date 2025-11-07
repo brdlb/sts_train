@@ -51,27 +51,27 @@ def test_can_challenge():
     assert can_challenge
 
 
-def test_can_call_pacao():
-    """Test pacao (believe) call possibility - any player can believe."""
+def test_can_call_believe():
+    """Test believe call possibility - any player can believe."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
     
-    # Cannot call pacao if no bid
-    can_pacao, msg = PerudoRules.can_call_pacao(game_state, 0)
-    assert not can_pacao
+    # Cannot call believe if no bid
+    can_believe, msg = PerudoRules.can_call_believe(game_state, 0)
+    assert not can_believe
     
     # Set bid
     game_state.set_bid(0, 3, 4)
     game_state.current_player = 1
     
-    # Any player can call pacao (believe) if there's a bid
-    can_pacao, msg = PerudoRules.can_call_pacao(game_state, 1)
-    assert can_pacao
+    # Any player can call believe if there's a bid
+    can_believe, msg = PerudoRules.can_call_believe(game_state, 1)
+    assert can_believe
     
-    # Player with 5 dice can also call pacao
+    # Player with 5 dice can also call believe
     game_state.player_dice_count[1] = 5
-    can_pacao, msg = PerudoRules.can_call_pacao(game_state, 1)
-    assert can_pacao
+    can_believe, msg = PerudoRules.can_call_believe(game_state, 1)
+    assert can_believe
 
 
 def test_process_challenge_result():
@@ -115,7 +115,7 @@ def test_get_available_actions():
     actions = PerudoRules.get_available_actions(game_state, 1)
     assert len(actions) > 0
     assert any(action[0] == "challenge" for action in actions)
-    assert any(action[0] == "pacao" for action in actions)  # Any player can believe
+    assert any(action[0] == "believe" for action in actions)  # Any player can believe
     assert any(action[0] == "bid" for action in actions)
 
 
@@ -216,13 +216,13 @@ def test_believe_exact_match_gains_die():
     # Player 1: [1, 1, 3, 3] = 2 (jokers) + 2 threes = 4 threes total = 5 ✓
     game_state.player_dice = [[2, 2, 3], [1, 1, 3, 3]]
     
-    pacao_success, actual_count = game_state.call_pacao(1)
-    assert pacao_success  # Exact match
+    believe_success, actual_count = game_state.call_believe(1)
+    assert believe_success  # Exact match
     assert actual_count == 5
     
     # Process result
-    loser_id, dice_lost, next_round_starter = PerudoRules.process_pacao_result(
-        game_state, 1, pacao_success, actual_count, 5
+    loser_id, dice_lost, next_round_starter = PerudoRules.process_believe_result(
+        game_state, 1, believe_success, actual_count, 5
     )
     assert loser_id is None  # No one loses
     assert dice_lost == 0
@@ -244,13 +244,13 @@ def test_believe_exact_match_starts_round():
     # Player 1: [1, 1, 3, 3, 3] = 2 (jokers) + 3 threes = 5 threes total = 5 ✓
     game_state.player_dice = [[2, 2, 2, 2, 2], [1, 1, 3, 3, 3]]
     
-    pacao_success, actual_count = game_state.call_pacao(1)
-    assert pacao_success  # Exact match
+    believe_success, actual_count = game_state.call_believe(1)
+    assert believe_success  # Exact match
     assert actual_count == 5
     
     # Process result
-    loser_id, dice_lost, next_round_starter = PerudoRules.process_pacao_result(
-        game_state, 1, pacao_success, actual_count, 5
+    loser_id, dice_lost, next_round_starter = PerudoRules.process_believe_result(
+        game_state, 1, believe_success, actual_count, 5
     )
     assert loser_id is None
     assert dice_lost == 0
@@ -271,13 +271,13 @@ def test_believe_not_exact_match_loses_die():
     # Total = 9 threes (more than 5)
     game_state.player_dice = [[1, 3, 3, 3, 3], [1, 3, 3, 3, 5]]
     
-    pacao_success, actual_count = game_state.call_pacao(1)
-    assert not pacao_success  # Not exact match
+    believe_success, actual_count = game_state.call_believe(1)
+    assert not believe_success  # Not exact match
     assert actual_count == 9  # 5 from player 0 + 4 from player 1
     
     # Process result
-    loser_id, dice_lost, next_round_starter = PerudoRules.process_pacao_result(
-        game_state, 1, pacao_success, actual_count, 5
+    loser_id, dice_lost, next_round_starter = PerudoRules.process_believe_result(
+        game_state, 1, believe_success, actual_count, 5
     )
     assert loser_id == 1  # Believer loses
     assert dice_lost == 1
@@ -338,7 +338,7 @@ def test_special_round_first_bid():
 
 
 def test_get_available_actions_believe():
-    """Test that believe (pacao) is available to any player after bid."""
+    """Test that believe is available to any player after bid."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
     
@@ -348,9 +348,9 @@ def test_get_available_actions_believe():
     
     # Any player should have believe available
     actions = PerudoRules.get_available_actions(game_state, 1)
-    assert any(action[0] == "pacao" for action in actions)
+    assert any(action[0] == "believe" for action in actions)
     
     # Player with 5 dice also has believe available
     game_state.player_dice_count[1] = 5
     actions = PerudoRules.get_available_actions(game_state, 1)
-    assert any(action[0] == "pacao" for action in actions)
+    assert any(action[0] == "believe" for action in actions)

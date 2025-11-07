@@ -117,22 +117,32 @@ class RLAgent(BaseAgent):
                 verbose=verbose,
             )
 
-    def act(self, observation: np.ndarray, deterministic: bool = False) -> int:
+    def act(self, observation, deterministic: bool = False) -> int:
         """
         Choose action based on observation.
 
         Args:
-            observation: Observation vector from environment
+            observation: Observation from environment (can be np.ndarray or Dict)
             deterministic: Whether to use deterministic policy
 
         Returns:
             Action from action_space
         """
         # Convert observation to format for SB3
-        # SB3 expects array of observations, so add dimension
-        obs_array = observation.reshape(1, -1)
-
-        action, _ = self.model.predict(obs_array, deterministic=deterministic)
+        # For Dict observations, SB3 expects a dict with batched arrays
+        # For array observations, add batch dimension
+        if isinstance(observation, dict):
+            # Dict observation: batch each key
+            obs_dict = {
+                key: np.array([value]) if isinstance(value, np.ndarray) else [value]
+                for key, value in observation.items()
+            }
+            action, _ = self.model.predict(obs_dict, deterministic=deterministic)
+        else:
+            # Array observation: add batch dimension
+            obs_array = observation.reshape(1, -1)
+            action, _ = self.model.predict(obs_array, deterministic=deterministic)
+        
         return int(action[0])
 
     def learn(self, total_timesteps: int, tb_log_name: Optional[str] = None, **kwargs):

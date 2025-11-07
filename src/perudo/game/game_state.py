@@ -44,7 +44,7 @@ class GameState:
         self.special_round_active: bool = False  # Special round active when declared by player with 1 die
         self.special_round_declared_by: Optional[int] = None  # Player who declared special round
         self.special_round_used: List[bool] = [False] * num_players  # Track if player has used special round
-        self.pacao_called: bool = False  # Whether pacao was called
+        self.believe_called: bool = False  # Whether believe was called
 
         # Game status
         self.game_over: bool = False
@@ -64,7 +64,7 @@ class GameState:
         self.special_round_active = False
         self.special_round_declared_by = None
         self.special_round_used = [False] * self.num_players
-        self.pacao_called = False
+        self.believe_called = False
         self.game_over = False
         self.winner = None
 
@@ -99,7 +99,7 @@ class GameState:
 
     def get_all_dice(self) -> List[List[int]]:
         """
-        Get all dice from all players (for checking after pacao).
+        Get all dice from all players (for checking after believe).
 
         Returns:
             List of lists of dice from all players
@@ -239,12 +239,12 @@ class GameState:
 
         return challenge_success, total_count, quantity
 
-    def call_pacao(self, caller_id: int) -> Tuple[bool, int]:
+    def call_believe(self, caller_id: int) -> Tuple[bool, int]:
         """
-        Call pacao (believe) - all players show their dice.
+        Call believe - all players show their dice.
 
         Args:
-            caller_id: ID of player calling pacao
+            caller_id: ID of player calling believe
 
         Returns:
             Tuple (whether dice count exactly equals bid, actual dice count)
@@ -257,11 +257,11 @@ class GameState:
         # Count all dice (respecting special round rules)
         total_count = self._count_dice_for_value(value)
 
-        # Pacao succeeds if actual count exactly equals bid
-        pacao_success = total_count == quantity
+        # Believe succeeds if actual count exactly equals bid
+        believe_success = total_count == quantity
 
-        self.pacao_called = True
-        return pacao_success, total_count
+        self.believe_called = True
+        return believe_success, total_count
 
     def lose_dice(self, player_id: int, count: int = 1) -> None:
         """
@@ -365,7 +365,7 @@ class GameState:
             "player_dice_count": self.player_dice_count.copy(),
             "palifico_active": self.palifico_active.copy(),
             "special_round_active": self.special_round_active,
-            "pacao_called": self.pacao_called,
+            "believe_called": self.believe_called,
             "game_over": self.game_over,
             "winner": self.winner,
         }

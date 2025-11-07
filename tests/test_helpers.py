@@ -10,7 +10,29 @@ from src.perudo.utils.helpers import (
     decode_bid,
     action_to_bid,
     bid_to_action,
+    create_action_mask,
 )
+
+
+def test_create_action_mask():
+    """Test creating action mask."""
+    available_actions = [
+        ("challenge", None, None),
+        ("believe", None, None),
+        ("bid", 1, 2),
+        ("bid", 1, 3),
+    ]
+    action_space_size = 2 + 30 * 6
+    mask = create_action_mask(available_actions, action_space_size)
+
+    assert mask[0] == True  # challenge
+    assert mask[1] == True  # believe
+    action_idx = bid_to_action(1, 2)
+    assert mask[action_idx] == True
+    action_idx = bid_to_action(1, 3)
+    assert mask[action_idx] == True
+    action_idx = bid_to_action(1, 4)
+    assert mask[action_idx] == False
 
 
 def test_create_observation_vector_with_agent_id():
@@ -22,7 +44,7 @@ def test_create_observation_vector_with_agent_id():
         player_dice_count=[5, 5, 5, 5],
         current_player=0,
         palifico_active=[False, False, False, False],
-        pacao_called=False,
+        believe_called=False,
         player_dice=[1, 2, 3, 4, 5],
         history_length=10,
         max_players=4,
@@ -37,7 +59,7 @@ def test_create_observation_vector_with_agent_id():
         player_dice_count=[5, 5, 5, 5],
         current_player=0,
         palifico_active=[False, False, False, False],
-        pacao_called=False,
+        believe_called=False,
         player_dice=[1, 2, 3, 4, 5],
         history_length=10,
         max_players=4,
@@ -68,7 +90,7 @@ def test_create_observation_vector_without_agent_id():
         player_dice_count=[5, 5],
         current_player=0,
         palifico_active=[False, False],
-        pacao_called=False,
+        believe_called=False,
         player_dice=[1, 2, 3, 4, 5],
         history_length=10,
         max_players=2,
@@ -102,9 +124,9 @@ def test_action_to_bid():
     assert param1 is None
     assert param2 is None
     
-    # Pacao action
+    # Believe action
     action_type, param1, param2 = action_to_bid(1, max_quantity=30)
-    assert action_type == "pacao"
+    assert action_type == "believe"
     assert param1 is None
     assert param2 is None
     
@@ -121,7 +143,7 @@ def test_bid_to_action():
     
     action = bid_to_action(quantity, value, max_quantity=30)
     
-    # Should be at least 2 (offset for challenge and pacao)
+    # Should be at least 2 (offset for challenge and believe)
     assert action >= 2
     
     # Decode back
@@ -139,7 +161,7 @@ def test_create_observation_vector_shape():
         player_dice_count=[5, 5, 5, 5],
         current_player=0,
         palifico_active=[False, False, False, False],
-        pacao_called=False,
+        believe_called=False,
         player_dice=[1, 2, 3, 4, 5],
         history_length=10,
         max_players=4,
@@ -148,7 +170,7 @@ def test_create_observation_vector_shape():
     )
     
     # Expected size: agent_id(4) + current_bid(2) + history(10*3) + 
-    # dice_count(4) + current_player(1) + palifico(4) + pacao(1) + player_dice(5)
+    # dice_count(4) + current_player(1) + palifico(4) + believe(1) + player_dice(5)
     expected_size = 4 + 2 + 10 * 3 + 4 + 1 + 4 + 1 + 5
     assert obs.shape == (expected_size,)
     assert obs.dtype == np.float32

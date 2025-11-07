@@ -1,0 +1,31 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Установите системные зависимости
+RUN apt-get update && apt-get install -y \
+    gcc \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Копируйте requirements и установите зависимости
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install gunicorn
+
+# Копируйте код приложения
+COPY . .
+
+# Создайте директории для данных
+RUN mkdir -p data models
+
+# Создайте пользователя для запуска приложения
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Экспортируйте порт
+EXPOSE 8000
+
+# Запустите приложение
+CMD ["gunicorn", "src.perudo.web.main:app", "--bind", "0.0.0.0:8000", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--timeout", "120"]
+

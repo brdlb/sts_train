@@ -47,6 +47,7 @@ class OpponentPool:
         keep_best: int = 3,
         snapshot_freq: int = 5000,
         elo_k: int = 32,
+        opponent_device: str = "cpu",
     ):
         """
         Initialize opponent pool.
@@ -58,6 +59,7 @@ class OpponentPool:
             keep_best: Number of best snapshots to always keep
             snapshot_freq: Frequency of saving snapshots (in steps)
             elo_k: ELO K-factor for rating updates
+            opponent_device: Device to use for opponent models (default: "cpu" to avoid GPU overhead)
         """
         self.pool_dir = pool_dir
         self.max_pool_size = max_pool_size
@@ -65,6 +67,7 @@ class OpponentPool:
         self.keep_best = keep_best
         self.snapshot_freq = snapshot_freq
         self.elo_k = elo_k
+        self.opponent_device = opponent_device
 
         # Create directory if it doesn't exist
         os.makedirs(pool_dir, exist_ok=True)
@@ -117,7 +120,7 @@ class OpponentPool:
             json.dump(data, f, indent=2)
 
     def save_snapshot(
-        self, model: PPO, step: int, prefix: str = "snapshot"
+        self, model: PPO, step: int, prefix: str = "snapshot", force: bool = False
     ) -> Optional[str]:
         """
         Save a snapshot of the current policy.
@@ -126,11 +129,12 @@ class OpponentPool:
             model: PPO model to save
             step: Current training step
             prefix: Prefix for snapshot filename
+            force: If True, ignore snapshot_freq and always save
 
         Returns:
             Path to saved snapshot, or None if not saved
         """
-        if step % self.snapshot_freq != 0:
+        if not force and step % self.snapshot_freq != 0:
             return None
 
         snapshot_id = f"{prefix}_step_{step}"
@@ -433,14 +437,15 @@ class OpponentPool:
         try:
             # Suppress SB3 wrapping messages
             with contextlib.redirect_stdout(StringIO()):
-                model = PPO.load(snapshot_path, env=env)
+                # Load opponent model on CPU to avoid GPU overhead from single-observation predictions
+                model = PPO.load(snapshot_path, env=env, device=self.opponent_device)
             return model
         except Exception as e:
             print(f"Error loading snapshot {snapshot_path}: {e}")
             return None
 
     @staticmethod
-    def load_model_from_path(model_path: str, env) -> Optional[PPO]:
+    def load_model_from_path(model_path: str, env, device: str = "cpu") -> Optional[PPO]:
         """
         Load a model from any path (not necessarily in the pool).
 
@@ -450,6 +455,7 @@ class OpponentPool:
         Args:
             model_path: Path to model file (.zip)
             env: Environment for loading model
+            device: Device to load model on (default: "cpu" to avoid GPU overhead)
 
         Returns:
             Loaded PPO model, or None if loading failed
@@ -461,7 +467,8 @@ class OpponentPool:
         try:
             # Suppress SB3 wrapping messages
             with contextlib.redirect_stdout(StringIO()):
-                model = PPO.load(model_path, env=env)
+                # Load opponent model on CPU to avoid GPU overhead from single-observation predictions
+                model = PPO.load(model_path, env=env, device=device)
             return model
         except Exception as e:
             print(f"Error loading model from {model_path}: {e}")
