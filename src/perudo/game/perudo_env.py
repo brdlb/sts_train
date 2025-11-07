@@ -15,6 +15,7 @@ from ..utils.helpers import (
     calculate_reward,
     action_to_bid,
     decode_bid,
+    create_action_mask,
 )
 
 class PerudoEnv(gym.Env):
@@ -94,6 +95,7 @@ class PerudoEnv(gym.Env):
             + 5  # player_dice
         )
         
+        action_size = 2 + max_quantity * 6
         self.observation_space = spaces.Dict({
             "bid_history": spaces.Box(
                 low=0, high=100, shape=(self.max_history_length, 3), dtype=np.int32
@@ -101,11 +103,11 @@ class PerudoEnv(gym.Env):
             "static_info": spaces.Box(
                 low=0, high=100, shape=(static_info_size,), dtype=np.float32
             ),
+            "action_mask": spaces.Box(low=0, high=1, shape=(action_size,), dtype=np.bool_),
         })
 
         # Define action space
         # Actions: 0=challenge, 1=believe, 2+=bid(encoded)
-        action_size = 2 + max_quantity * 6  # 2 special + all bids
         self.action_space = spaces.Discrete(action_size)
 
         # Current active player (for whom observation is returned)
@@ -671,6 +673,12 @@ class PerudoEnv(gym.Env):
             agent_id=player_id,
             num_agents=self.max_num_players,  # Use max for observation space
         )
+
+        available_actions = PerudoRules.get_available_actions(self.game_state, player_id)
+        action_mask = create_action_mask(
+            available_actions, self.action_space.n, self.max_quantity
+        )
+        observation["action_mask"] = action_mask
 
         return observation
 
