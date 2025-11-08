@@ -1034,28 +1034,73 @@ class PerudoMultiAgentVecEnv(VecEnv):
         Get action masks for all environments.
         
         This method is required by MaskablePPO to support action masking.
-        It extracts action_mask from the last observations.
+        It gets action_mask directly from each environment for the learning agent (agent 0).
+        
+        CRITICAL: This method is called by MaskablePPO before predict() to get current action masks.
+        It must return masks for the learning agent (agent 0) based on the CURRENT game state.
         
         Returns:
             Array of action masks with shape (num_envs, action_space.n)
         """
-        if self.last_obs is None:
-            # If no observations yet, return all actions as valid
+        masks = []
+        for i, env in enumerate(self.envs):
+            # CRITICAL: Always get mask for learning agent (agent 0) in normal mode
+            # In all_learn mode, use current active agent
+            # But for MaskablePPO, we always want masks for agent 0 (the learning agent)
+            # because only agent 0 makes moves through VecEnv in normal mode
+            if self.all_agents_learn_mode[i]:
+                # In all_learn mode, use current active agent
+                agent_id = self.active_agent_ids[i]
+            else:
+                # Normal mode: always use agent 0 (learning agent)
+                agent_id = 0
+            
+            # IMPORTANT: Get observation for the agent who will make the move
+            # This should be the learning agent (agent 0) in normal mode
+            # Make sure we get the observation for the correct agent and current game state
+            try:
+                obs = env.get_observation_for_player(agent_id)
+                
+                # Extract action_mask from observation
+                if isinstance(obs, dict):
+                    if "action_mask" in obs:
+                        action_mask = obs["action_mask"].copy()  # Make a copy to avoid issues
+                        # Ensure it's boolean and 1D array
+                        if action_mask.dtype != bool:
+                            action_mask = action_mask.astype(bool)
+                        # Flatten if needed (should be 1D already, but ensure)
+                        if action_mask.ndim > 1:
+                            action_mask = action_mask.flatten()
+                        # Ensure correct size
+                        if len(action_mask) != self.action_space.n:
+                            # Size mismatch, return all actions as valid (fallback)
+                            print(f"Warning: Action mask size mismatch for env {i}: "
+                                  f"expected {self.action_space.n}, got {len(action_mask)}")
+                            masks.append(np.ones(self.action_space.n, dtype=bool))
+                        else:
+                            masks.append(action_mask)
+                    else:
+                        # No action_mask in observation, return all actions as valid
+                        masks.append(np.ones(self.action_space.n, dtype=bool))
+                else:
+                    # Array observations don't have action_mask, return all actions as valid
+                    masks.append(np.ones(self.action_space.n, dtype=bool))
+            except Exception as e:
+                # If there's an error getting observation, return all actions as valid (fallback)
+                print(f"Warning: Error getting action mask for env {i}, agent {agent_id}: {e}")
+                masks.append(np.ones(self.action_space.n, dtype=bool))
+        
+        # Convert list of masks to array with shape (num_envs, action_space.n)
+        if len(masks) == 0:
             return np.ones((self.num_envs, self.action_space.n), dtype=bool)
         
-        # Extract action_mask from dict observations
-        if isinstance(self.last_obs, dict):
-            if "action_mask" in self.last_obs:
-                # action_mask should have shape (num_envs, action_space.n)
-                action_mask = self.last_obs["action_mask"]
-                # Ensure it's boolean
-                if action_mask.dtype != bool:
-                    action_mask = action_mask.astype(bool)
-                return action_mask
-            else:
-                # No action_mask in observations, return all actions as valid
-                return np.ones((self.num_envs, self.action_space.n), dtype=bool)
-        else:
-            # Array observations don't have action_mask, return all actions as valid
+        # Ensure all masks have the same shape
+        masks_array = np.array(masks)
+        if masks_array.shape != (self.num_envs, self.action_space.n):
+            print(f"Warning: Action masks shape mismatch: expected {(self.num_envs, self.action_space.n)}, "
+                  f"got {masks_array.shape}")
+            # Return all actions as valid if shape is wrong
             return np.ones((self.num_envs, self.action_space.n), dtype=bool)
+        
+        return masks_array
 

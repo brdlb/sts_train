@@ -75,9 +75,20 @@ class TrainingConfig:
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     opponent_device: Optional[str] = "cpu"  
     learning_rate: float = 3.0e-4  
-    n_steps: int = 2048  
-    batch_size: int = 256  
-    n_epochs: int = 10  
+    # Batch collection parameters - optimized for stable learning with 16 parallel environments
+    # n_steps: Number of steps to collect before updating policy
+    #   With 16 envs, n_steps=8192 means ~512 steps per environment = ~0.5-1 complete episodes
+    #   This allows collecting enough diverse data from multiple episodes before updating
+    n_steps: int = 8192  # Increased from 2048 to collect more data before updates
+    # batch_size: Mini-batch size for gradient updates
+    #   Should be a divisor of (n_steps * num_envs) for efficient training
+    #   With n_steps=8192 and num_envs=16, effective buffer = 131,072 samples
+    #   batch_size=256 gives 512 batches per cycle, good balance between stability and efficiency
+    batch_size: int = 256  # Optimal for n_steps=8192, gives good gradient update frequency
+    # n_epochs: Number of times to iterate over the collected data
+    #   Reduced from 10 to 4-6 to prevent overfitting on small batches
+    #   With more data (n_steps=8192), fewer epochs are needed per update
+    n_epochs: int = 4  # Reduced from 10 to prevent overfitting on collected batch
     gamma: float = 0.95
     gae_lambda: float = 0.95
     clip_range: float = 0.2

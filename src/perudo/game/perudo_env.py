@@ -249,6 +249,8 @@ class PerudoEnv(gym.Env):
 
         # Check action masking for learning agent (player_id=0)
         # This helps diagnose if MaskablePPO is properly using action masks
+        # NOTE: This check is useful for debugging, but invalid actions are handled
+        # by the environment (penalty and turn pass), so training can continue
         if self.active_player_id == 0:
             # Get available actions and create mask
             available_actions = PerudoRules.get_available_actions(self.game_state, self.active_player_id)
@@ -257,14 +259,20 @@ class PerudoEnv(gym.Env):
             )
             # Check if the selected action is allowed by the mask
             if not action_mask[action]:
-                import warnings
-                warnings.warn(
-                    f"Learning agent (player 0) selected invalid action {action} "
-                    f"(type: {action_type}, params: {param1}, {param2}). "
-                    f"Action mask indicates this action should be masked. "
-                    f"This suggests MaskablePPO may not be properly using action masks.",
-                    UserWarning
-                )
+                # Count invalid actions for statistics
+                self.episode_invalid_action_count += 1
+                # Only warn occasionally to avoid spam (every 10th invalid action)
+                if self.episode_invalid_action_count % 10 == 1:
+                    import warnings
+                    warnings.warn(
+                        f"Learning agent (player 0) selected invalid action {action} "
+                        f"(type: {action_type}, params: {param1}, {param2}). "
+                        f"Action mask indicates this action should be masked. "
+                        f"Total invalid actions this episode: {self.episode_invalid_action_count}. "
+                        f"This suggests MaskablePPO may not be properly using action masks. "
+                        f"Invalid actions will be penalized and turn will be passed.",
+                        UserWarning
+                    )
 
         # Execute action
         reward = 0.0

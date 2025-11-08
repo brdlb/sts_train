@@ -7,6 +7,8 @@ import re
 import glob
 import threading
 import contextlib
+import shutil
+import json
 from io import StringIO
 import numpy as np
 from typing import List, Optional
@@ -111,6 +113,107 @@ def find_latest_model(model_dir: str) -> Optional[str]:
             return final_model_path
     
     return latest_model
+
+
+def restore_model_from_opponent_pool(model_dir: str, pool_dir: str) -> Optional[str]:
+    """
+    Restore model from opponent pool if no model exists in the root directory.
+    
+    This function checks if there are any models in the root model directory.
+    If not, it looks for the best model in the opponent pool (by step count or ELO)
+    and copies it to the root directory with the correct naming format.
+    
+    Args:
+        model_dir: Root directory for models (e.g., "models")
+        pool_dir: Directory containing opponent pool (e.g., "models/opponent_pool")
+    
+    Returns:
+        Path to the restored model in root directory, or None if no model was found in pool
+    """
+    # Check if there's already a model in root
+    existing_model = find_latest_model(model_dir)
+    if existing_model and os.path.exists(existing_model):
+        return None  # Model already exists, no need to restore
+    
+    # Check if pool directory exists
+    if not os.path.exists(pool_dir):
+        return None
+    
+    # Load pool metadata
+    metadata_file = os.path.join(pool_dir, "pool_metadata.json")
+    if not os.path.exists(metadata_file):
+        return None
+    
+    try:
+        with open(metadata_file, "r") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"Warning: Could not load pool metadata: {e}")
+        return None
+    
+    snapshots = data.get("snapshots", {})
+    if not snapshots:
+        return None
+    
+    # Find the best snapshot (by step count - prefer the most recent training step)
+    best_snapshot = None
+    best_step = -1
+    
+    for snapshot_id, snapshot_data in snapshots.items():
+        snapshot_path = snapshot_data.get("path", "")
+        step = snapshot_data.get("step", 0)
+        
+        # Handle both absolute and relative paths
+        # If path is absolute but doesn't exist, try to find by filename in pool_dir
+        if os.path.isabs(snapshot_path):
+            if not os.path.exists(snapshot_path):
+                # Try to find file by name in pool_dir
+                filename = os.path.basename(snapshot_path)
+                fallback_path = os.path.join(pool_dir, filename)
+                if os.path.exists(fallback_path):
+                    snapshot_path = fallback_path
+                else:
+                    continue  # Skip if file doesn't exist
+        else:
+            # Relative path - construct absolute path
+            snapshot_path = os.path.join(pool_dir, os.path.basename(snapshot_path))
+        
+        # Check if file exists
+        if not os.path.exists(snapshot_path):
+            continue
+        
+        # Prefer snapshot with highest step count
+        if step > best_step:
+            best_step = step
+            best_snapshot = {
+                "id": snapshot_id,
+                "path": snapshot_path,
+                "step": step,
+                "elo": snapshot_data.get("elo", 1500.0),
+            }
+    
+    if best_snapshot is None:
+        return None
+    
+    # Copy the best snapshot to root directory with correct naming
+    source_path = best_snapshot["path"]
+    target_filename = f"perudo_model_{best_snapshot['step']}_steps.zip"
+    target_path = os.path.join(model_dir, target_filename)
+    
+    try:
+        # Ensure model directory exists
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # Copy file
+        shutil.copy2(source_path, target_path)
+        print(f"Restored model from opponent pool: {best_snapshot['id']}")
+        print(f"  Source: {source_path}")
+        print(f"  Target: {target_path}")
+        print(f"  Step: {best_snapshot['step']}, ELO: {best_snapshot['elo']:.2f}")
+        return target_path
+    except Exception as e:
+        print(f"Warning: Failed to copy model from opponent pool: {e}")
+        return None
 
 
 class AdvantageNormalizationCallback(BaseCallback):
@@ -458,6 +561,15 @@ class SelfPlayTraining:
         # Determine device for training (GPU with CPU fallback)
         device = get_device(config.training.device)
         
+        # Try to restore model from opponent pool if no model exists in root
+        # This allows continuing training from opponent pool snapshots
+        restored_model_path = restore_model_from_opponent_pool(
+            config.training.model_dir,
+            pool_dir
+        )
+        if restored_model_path:
+            print(f"Successfully restored model from opponent pool to: {restored_model_path}")
+        
         # Try to find and load the latest saved model
         latest_model_path = find_latest_model(config.training.model_dir)
         
@@ -553,14 +665,33 @@ class SelfPlayTraining:
         print(f"Number of environments (tables): {self.num_envs}")
         print(f"Number of players per table: {self.num_players}")
         print(f"Total timesteps: {self.config.training.total_timesteps}")
-        print(f"Effective batch size: {self.config.training.n_steps * self.num_envs * self.num_players}")
+        
+        # Calculate effective buffer size
+        # Note: In multi-agent setup, only agent_id=0 is learning, but we collect data from all agents
+        # The actual learning buffer size is n_steps * num_envs (one step per env per collection step)
+        effective_buffer_size = self.config.training.n_steps * self.num_envs
+        steps_per_env = self.config.training.n_steps
+        num_batches_per_cycle = effective_buffer_size // self.config.training.batch_size
+        gradient_updates_per_cycle = num_batches_per_cycle * self.config.training.n_epochs
+        
+        print(f"Training configuration:")
+        print(f"  n_steps: {self.config.training.n_steps} (steps to collect before update)")
+        print(f"  batch_size: {self.config.training.batch_size} (mini-batch size)")
+        print(f"  n_epochs: {self.config.training.n_epochs} (epochs per update cycle)")
+        print(f"  Effective buffer size: {effective_buffer_size:,} samples")
+        print(f"  Steps per environment: {steps_per_env} (~{steps_per_env/1000:.1f}K steps/env)")
+        print(f"  Batches per cycle: {num_batches_per_cycle}")
+        print(f"  Gradient updates per cycle: {gradient_updates_per_cycle:,}")
         
         # Check that batch_size divides evenly
-        effective_batch_size = self.config.training.n_steps * self.num_envs * self.num_players
-        if effective_batch_size % self.config.training.batch_size != 0:
-            print(f"Warning: Effective batch size {effective_batch_size} does not divide evenly "
+        if effective_buffer_size % self.config.training.batch_size != 0:
+            print(f"Warning: Effective buffer size {effective_buffer_size} does not divide evenly "
                   f"by batch_size {self.config.training.batch_size}")
-            print(f"Consider adjusting batch_size or num_envs")
+            print(f"Consider adjusting batch_size (current: {self.config.training.batch_size})")
+            print(f"  Suggested batch_size values that divide evenly: ", end="")
+            # Suggest divisors
+            suggested_sizes = [s for s in [128, 256, 512, 1024] if effective_buffer_size % s == 0]
+            print(", ".join(map(str, suggested_sizes)) if suggested_sizes else "none found")
         
         # Create callbacks
         callbacks = []
@@ -647,14 +778,14 @@ def main():
     parser.add_argument(
         "--n-steps",
         type=int,
-        default=2048,
-        help="Number of steps to collect before update",
+        default=8192,
+        help="Number of steps to collect before update (recommended: 8192 for 16 envs)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=64,
-        help="Batch size for training",
+        default=256,
+        help="Batch size for training (recommended: 256 for n_steps=8192)",
     )
     parser.add_argument(
         "--device",
