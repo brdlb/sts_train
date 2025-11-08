@@ -21,6 +21,51 @@ from .database.operations import (
 )
 from .database.database import SessionLocal
 from .config import web_config
+import os
+import traceback
+
+
+def validate_environment_config() -> None:
+    """
+    Validate that environment configuration matches training configuration.
+    
+    This ensures that models trained with specific parameters can be loaded
+    and used correctly in the server environment.
+    
+    Raises:
+        ValueError: If environment configuration doesn't match training configuration
+    """
+    training_config = DEFAULT_CONFIG.training
+    game_config = DEFAULT_CONFIG.game
+    
+    # Check max_history_length matches transformer_history_length
+    if web_config.transformer_history_length != training_config.transformer_history_length:
+        raise ValueError(
+            f"Environment max_history_length ({web_config.transformer_history_length}) "
+            f"does not match training transformer_history_length ({training_config.transformer_history_length}). "
+            f"Models were trained with history_length={training_config.transformer_history_length}."
+        )
+    
+    # Check max_quantity matches
+    if web_config.max_quantity != game_config.max_quantity:
+        raise ValueError(
+            f"Environment max_quantity ({web_config.max_quantity}) "
+            f"does not match training max_quantity ({game_config.max_quantity})."
+        )
+    
+    # Check dice_per_player matches
+    if web_config.dice_per_player != game_config.dice_per_player:
+        raise ValueError(
+            f"Environment dice_per_player ({web_config.dice_per_player}) "
+            f"does not match training dice_per_player ({game_config.dice_per_player})."
+        )
+    
+    # Check total_dice_values matches
+    if web_config.total_dice_values != game_config.total_dice_values:
+        raise ValueError(
+            f"Environment total_dice_values ({web_config.total_dice_values}) "
+            f"does not match training total_dice_values ({game_config.total_dice_values})."
+        )
 
 
 class GameSession:
@@ -39,12 +84,27 @@ class GameSession:
             game_id: Unique game session ID
             model_paths: List of model paths for AI players (3 models for 3 AI players)
             db_game_id: Database game ID
+        
+        Raises:
+            ValueError: If environment configuration doesn't match training configuration
+            FileNotFoundError: If model file doesn't exist
+            RuntimeError: If model cannot be loaded due to incompatibility
         """
         self.game_id = game_id
         self.db_game_id = db_game_id
         self.model_paths = model_paths
 
+        # Validate environment configuration before creating environment
+        try:
+            validate_environment_config()
+        except ValueError as e:
+            raise ValueError(
+                f"Environment configuration mismatch: {str(e)}\n"
+                f"Please ensure web_config matches training configuration."
+            ) from e
+
         # Create environment (4 players: human at position 0, 3 AI at positions 1, 2, 3)
+        # Environment parameters must match training configuration
         self.env = PerudoEnv(
             num_players=4,
             dice_per_player=web_config.dice_per_player,
@@ -65,19 +125,61 @@ class GameSession:
         self.ai_agents: Dict[int, RLAgent] = {}
         for i, model_path in enumerate(model_paths):
             player_id = i + 1  # AI players are at positions 1, 2, 3
+            
+            # Validate model path exists
+            if not os.path.exists(model_path):
+                error_msg = (
+                    f"Model file not found for player {player_id}: {model_path}\n"
+                    f"Please check that the model file exists and the path is correct."
+                )
+                print(f"ERROR: {error_msg}")
+                raise FileNotFoundError(error_msg)
+            
             try:
+                # Create agent with load_model_later=True to avoid creating temporary model
+                # This ensures the model is loaded with the correct architecture from the saved file
                 agent = RLAgent(
                     agent_id=player_id,
                     env=self.env,
-                    model=None,  # Will load from path
+                    load_model_later=True,  # Don't create model now, will load from file
                 )
-                agent.load(model_path)
+                
+                # Load model with explicit device="cpu" for server usage
+                # This avoids GPU overhead and memory issues
+                agent.load(model_path, device="cpu")
                 self.ai_agents[player_id] = agent
-            except Exception as e:
-                print(f"Error loading model {model_path} for player {player_id}: {e}")
-                # Create a dummy agent if model fails to load
-                # In production, you might want to handle this differently
+                
+                if web_config.debug:
+                    print(f"Successfully loaded model for player {player_id}: {model_path}")
+                    
+            except FileNotFoundError as e:
+                # FileNotFoundError is already handled above, but re-raise for clarity
                 raise
+            except ValueError as e:
+                # ValueError from load() indicates model incompatibility
+                error_msg = (
+                    f"Failed to load model for player {player_id}: {model_path}\n"
+                    f"Error: {str(e)}\n"
+                    f"This usually means the model was trained with different environment parameters.\n"
+                    f"Please ensure:\n"
+                    f"  - max_history_length matches transformer_history_length ({web_config.transformer_history_length})\n"
+                    f"  - max_quantity matches ({web_config.max_quantity})\n"
+                    f"  - observation_space structure matches (Dict with 'bid_history' and 'static_info')\n"
+                    f"  - action_space matches\n"
+                    f"Full traceback:\n{traceback.format_exc()}"
+                )
+                print(f"ERROR: {error_msg}")
+                raise RuntimeError(error_msg) from e
+            except Exception as e:
+                # Catch any other unexpected errors
+                error_msg = (
+                    f"Unexpected error loading model for player {player_id}: {model_path}\n"
+                    f"Error type: {type(e).__name__}\n"
+                    f"Error message: {str(e)}\n"
+                    f"Full traceback:\n{traceback.format_exc()}"
+                )
+                print(f"ERROR: {error_msg}")
+                raise RuntimeError(error_msg) from e
 
         # Game state tracking
         self.turn_number = 0

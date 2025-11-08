@@ -59,6 +59,7 @@ class RLAgent(BaseAgent):
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
         verbose: int = 1,
+        load_model_later: bool = False,
     ):
         """
         Initialize RL agent.
@@ -67,19 +68,20 @@ class RLAgent(BaseAgent):
             agent_id: Unique agent ID
             env: Perudo environment
             model: Existing MaskablePPO model (if any)
-            policy: Policy type
+            policy: Policy type (only used if model is None and load_model_later is False)
             device: Device string (e.g., "cpu", "cuda"). If None, auto-detects GPU with CPU fallback
-            learning_rate: Learning rate
-            n_steps: Number of steps to collect data before update
-            batch_size: Batch size for training
-            n_epochs: Number of epochs to update on one data collection
-            gamma: Discount factor
-            gae_lambda: GAE parameter (Generalized Advantage Estimation)
-            clip_range: Clipping parameter for PPO
-            ent_coef: Entropy coefficient (for exploration)
-            vf_coef: Value function coefficient
-            max_grad_norm: Maximum gradient norm
+            learning_rate: Learning rate (only used if model is None and load_model_later is False)
+            n_steps: Number of steps to collect data before update (only used if model is None and load_model_later is False)
+            batch_size: Batch size for training (only used if model is None and load_model_later is False)
+            n_epochs: Number of epochs to update on one data collection (only used if model is None and load_model_later is False)
+            gamma: Discount factor (only used if model is None and load_model_later is False)
+            gae_lambda: GAE parameter (Generalized Advantage Estimation) (only used if model is None and load_model_later is False)
+            clip_range: Clipping parameter for PPO (only used if model is None and load_model_later is False)
+            ent_coef: Entropy coefficient (for exploration) (only used if model is None and load_model_later is False)
+            vf_coef: Value function coefficient (only used if model is None and load_model_later is False)
+            max_grad_norm: Maximum gradient norm (only used if model is None and load_model_later is False)
             verbose: Verbosity level
+            load_model_later: If True, don't create model now (will be loaded via load() method)
         """
         super().__init__(agent_id)
 
@@ -89,6 +91,12 @@ class RLAgent(BaseAgent):
         if model is not None:
             self.model = model
             self.vec_env = None  # If model already created, vec_env not needed
+        elif load_model_later:
+            # Don't create model now - it will be loaded via load() method
+            # This is useful for server-side loading where we want to load
+            # a model with specific architecture (e.g., MultiInputPolicy + TransformerFeaturesExtractor)
+            self.model = None
+            self.vec_env = None
         else:
             # Create environment wrapper for SB3
             def make_env():
@@ -127,7 +135,13 @@ class RLAgent(BaseAgent):
 
         Returns:
             Action from action_space
+        
+        Raises:
+            RuntimeError: If model is not loaded
         """
+        if self.model is None:
+            raise RuntimeError("Model is not loaded. Call load() method first.")
+        
         # Convert observation to format for SB3
         # For Dict observations, SB3 expects a dict with batched arrays
         # For array observations, add batch dimension
@@ -153,7 +167,13 @@ class RLAgent(BaseAgent):
             total_timesteps: Total number of steps for training
             tb_log_name: Name for TensorBoard logs
             **kwargs: Additional parameters for learn()
+        
+        Raises:
+            RuntimeError: If model is not loaded
         """
+        if self.model is None:
+            raise RuntimeError("Model is not loaded. Cannot train.")
+        
         # Ensure vec_env exists for training
         if self.vec_env is None and hasattr(self.model, 'env'):
             # If vec_env not created, use env from model
@@ -176,19 +196,51 @@ class RLAgent(BaseAgent):
 
         Args:
             path: Path to save model
+        
+        Raises:
+            RuntimeError: If model is not loaded
         """
+        if self.model is None:
+            raise RuntimeError("Model is not loaded. Cannot save.")
         self.model.save(path)
 
-    def load(self, path: str):
+    def load(self, path: str, device: Optional[str] = "cpu"):
         """
-        Load model.
+        Load model from path.
+        
+        This method loads a saved MaskablePPO model. The model architecture
+        (policy type, features extractor, etc.) is automatically restored from
+        the saved file. This is important for models trained with custom
+        architectures like MultiInputPolicy with TransformerFeaturesExtractor.
 
         Args:
-            path: Path to saved model
+            path: Path to saved model file (.zip)
+            device: Device to load model on (default: "cpu" for server usage).
+                   Use "cpu" for inference to avoid GPU overhead and memory issues.
+        
+        Raises:
+            FileNotFoundError: If model file doesn't exist
+            ValueError: If model cannot be loaded or is incompatible with environment
         """
+        import os
+        
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model file not found: {path}")
+        
         # Suppress SB3 wrapping messages
         with contextlib.redirect_stdout(StringIO()):
-            self.model = MaskablePPO.load(path, env=self.env)
+            try:
+                # Load model with specified device
+                # SB3 will automatically restore the policy architecture (e.g., MultiInputPolicy)
+                # and features extractor (e.g., TransformerFeaturesExtractor) from the saved file
+                # The env parameter is used for validation (observation_space, action_space)
+                self.model = MaskablePPO.load(path, env=self.env, device=device)
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to load model from {path}: {str(e)}\n"
+                    f"Make sure the model was trained with the same environment configuration "
+                    f"(observation_space, action_space, max_history_length, etc.)"
+                ) from e
 
     def reset(self):
         """Reset agent state."""
