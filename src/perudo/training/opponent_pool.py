@@ -11,7 +11,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 from dataclasses import dataclass, asdict
-from stable_baselines3 import PPO
+from sb3_contrib import MaskablePPO
 
 
 @dataclass
@@ -120,13 +120,13 @@ class OpponentPool:
             json.dump(data, f, indent=2)
 
     def save_snapshot(
-        self, model: PPO, step: int, prefix: str = "snapshot", force: bool = False
+        self, model: MaskablePPO, step: int, prefix: str = "snapshot", force: bool = False
     ) -> Optional[str]:
         """
         Save a snapshot of the current policy.
 
         Args:
-            model: PPO model to save
+            model: MaskablePPO model to save
             step: Current training step
             prefix: Prefix for snapshot filename
             force: If True, ignore snapshot_freq and always save
@@ -420,7 +420,7 @@ class OpponentPool:
             for snapshot_id, snapshot in self.snapshots.items()
         }
 
-    def load_snapshot(self, snapshot_path: str, env) -> Optional[PPO]:
+    def load_snapshot(self, snapshot_path: str, env) -> Optional[MaskablePPO]:
         """
         Load a snapshot model.
 
@@ -429,23 +429,19 @@ class OpponentPool:
             env: Environment for loading model
 
         Returns:
-            Loaded PPO model, or None if loading failed
+            Loaded MaskablePPO model, or None if loading failed
         """
         if not os.path.exists(snapshot_path):
             return None
 
-        try:
-            # Suppress SB3 wrapping messages
-            with contextlib.redirect_stdout(StringIO()):
-                # Load opponent model on CPU to avoid GPU overhead from single-observation predictions
-                model = PPO.load(snapshot_path, env=env, device=self.opponent_device)
-            return model
-        except Exception as e:
-            print(f"Error loading snapshot {snapshot_path}: {e}")
-            return None
+        # Suppress SB3 wrapping messages
+        with contextlib.redirect_stdout(StringIO()):
+            # Load opponent model on CPU to avoid GPU overhead from single-observation predictions
+            model = MaskablePPO.load(snapshot_path, env=env, device=self.opponent_device)
+        return model
 
     @staticmethod
-    def load_model_from_path(model_path: str, env, device: str = "cpu") -> Optional[PPO]:
+    def load_model_from_path(model_path: str, env, device: str = "cpu") -> Optional[MaskablePPO]:
         """
         Load a model from any path (not necessarily in the pool).
 
@@ -458,21 +454,17 @@ class OpponentPool:
             device: Device to load model on (default: "cpu" to avoid GPU overhead)
 
         Returns:
-            Loaded PPO model, or None if loading failed
+            Loaded MaskablePPO model, or None if loading failed
         """
         if not os.path.exists(model_path):
             print(f"Error: Model path does not exist: {model_path}")
             return None
 
-        try:
-            # Suppress SB3 wrapping messages
-            with contextlib.redirect_stdout(StringIO()):
-                # Load opponent model on CPU to avoid GPU overhead from single-observation predictions
-                model = PPO.load(model_path, env=env, device=device)
-            return model
-        except Exception as e:
-            print(f"Error loading model from {model_path}: {e}")
-            return None
+        # Suppress SB3 wrapping messages
+        with contextlib.redirect_stdout(StringIO()):
+            # Load opponent model on CPU to avoid GPU overhead from single-observation predictions
+            model = MaskablePPO.load(model_path, env=env, device=device)
+        return model
 
     def get_current_policy_elo(self) -> float:
         """

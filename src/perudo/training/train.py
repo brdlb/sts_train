@@ -11,6 +11,7 @@ from io import StringIO
 import numpy as np
 from typing import List, Optional
 from sb3_contrib import MaskablePPO
+from sb3_contrib.common.wrappers import ActionMasker
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
 from stable_baselines3.common.vec_env import VecNormalize, VecMonitor
 
@@ -162,14 +163,17 @@ class SelfPlayTrainingCallback(BaseCallback):
         snapshot_freq: int = 50000,
         verbose: int = 0,
         debug: bool = False,
-        save_snapshot_every_cycle: bool = True
+        save_snapshot_every_cycle: bool = True,
+        snapshot_cycle_freq: int = 10
     ):
         super().__init__(verbose)
         self.opponent_pool = opponent_pool
         self.snapshot_freq = snapshot_freq
         self.debug = debug
         self.save_snapshot_every_cycle = save_snapshot_every_cycle
+        self.snapshot_cycle_freq = snapshot_cycle_freq  # Сохранять снапшот каждые N циклов обучения
         self.current_step = 0
+        self.training_cycle_count = 0  # Счетчик циклов обучения
         self.vec_env = None
         # Флаг для отслеживания, когда нужно сохранить снапшот после обновления модели
         self._pending_snapshot = False
@@ -208,7 +212,7 @@ class SelfPlayTrainingCallback(BaseCallback):
                 force=True  # Force save regardless of snapshot_freq
             )
             if self.verbose > 0:
-                print(f"Saved snapshot after training cycle (step {current_step})")
+                print(f"Saved snapshot after training cycle {self.training_cycle_count} (step {current_step})")
             self._pending_snapshot = False
         
         # Собираем episode_info из infos всех env (SB3 их передаёт в self.locals["infos"])
@@ -271,9 +275,60 @@ class SelfPlayTrainingCallback(BaseCallback):
         but before the model update. We set a flag here and save the snapshot
         in the next _on_step() call, which happens after the model update.
         """
+        # Увеличиваем счетчик циклов обучения
+        self.training_cycle_count += 1
+        
         # Set flag to save snapshot after model update (in next _on_step())
-        if self.save_snapshot_every_cycle:
+        # Сохраняем снапшот только каждые snapshot_cycle_freq циклов
+        if self.save_snapshot_every_cycle and self.training_cycle_count % self.snapshot_cycle_freq == 0:
             self._pending_snapshot = True
+            if self.verbose > 0:
+                print(f"Training cycle {self.training_cycle_count}: will save snapshot after model update")
+        
+        # Log collected statistics to TensorBoard
+        with self._lock:
+            if len(self.episode_rewards) > 0:
+                # Calculate statistics from collected episodes
+                mean_reward = np.mean(self.episode_rewards)
+                mean_length = np.mean(self.episode_lengths)
+                win_rate = np.mean(self.episode_wins) if len(self.episode_wins) > 0 else 0.0
+                
+                # Log to TensorBoard using logger (if available)
+                # In SB3, BaseCallback has access to self.logger which is a Logger instance
+                # The logger is initialized by the model when learn() is called
+                if hasattr(self, 'logger') and self.logger is not None:
+                    try:
+                        # Log custom metrics
+                        self.logger.record("custom/mean_episode_reward", mean_reward)
+                        self.logger.record("custom/mean_episode_length", mean_length)
+                        self.logger.record("custom/win_rate", win_rate)
+                        self.logger.record("custom/total_episodes", len(self.episode_rewards))
+                        
+                        # Log opponent pool statistics
+                        pool_stats = self.opponent_pool.get_statistics()
+                        if pool_stats:
+                            self.logger.record("custom/opponent_pool_size", pool_stats.get("pool_size", 0))
+                            self.logger.record("custom/opponent_pool_total_episodes", pool_stats.get("total_episodes", 0))
+                            
+                            # Log average winrate of opponents in pool
+                            avg_winrate = pool_stats.get("average_winrate", 0.0)
+                            if avg_winrate is not None:
+                                self.logger.record("custom/opponent_pool_avg_winrate", avg_winrate)
+                    except Exception as e:
+                        # Don't crash training if logging fails
+                        if self.verbose > 0:
+                            print(f"Warning: Failed to log metrics to TensorBoard: {e}")
+                elif self.verbose > 1:
+                    # Debug: log when logger is not available
+                    print("Debug: Logger not available in callback (this is normal before learn() is called)")
+                
+                # Clear buffers after logging (keep only recent episodes for rolling average)
+                # Keep last 100 episodes for better statistics
+                max_buffer_size = 100
+                if len(self.episode_rewards) > max_buffer_size:
+                    self.episode_rewards = self.episode_rewards[-max_buffer_size:]
+                    self.episode_lengths = self.episode_lengths[-max_buffer_size:]
+                    self.episode_wins = self.episode_wins[-max_buffer_size:]
         
         # Winrate statistics are updated in VecEnv.step_wait() when episodes end
         return True
@@ -302,8 +357,15 @@ class SelfPlayTraining:
         self.num_envs = config.training.num_envs
         
         # Create directories
-        os.makedirs(config.training.log_dir, exist_ok=True)
-        os.makedirs(config.training.model_dir, exist_ok=True)
+        # Ensure paths are absolute for consistency
+        log_dir = os.path.abspath(config.training.log_dir)
+        model_dir = os.path.abspath(config.training.model_dir)
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # Update config with absolute paths
+        config.training.log_dir = log_dir
+        config.training.model_dir = model_dir
         
         # Create opponent pool directory
         pool_dir = os.path.join(config.training.model_dir, "opponent_pool")
@@ -333,13 +395,61 @@ class SelfPlayTraining:
             random_num_players=config.game.random_num_players,
             min_players=config.game.min_players,
             max_players=config.game.max_players,
+            reward_config=config.reward,
         )
         
-        # Wrap with VecMonitor for CSV logging of episode statistics
-        # This will save episode rewards, lengths, and times to CSV files
+        # Wrap with ActionMasker to enable action masking for MaskablePPO
+        # ActionMasker extracts action_mask from observation dict and provides action_masks() method
+        def mask_fn(env):
+            return env.reset()[0]["action_mask"].astype(bool)
+        
+        # For VecEnv, we need to wrap each individual environment
+        # ActionMasker doesn't work directly with VecEnv, so we need to wrap individual envs
+        # However, PerudoMultiAgentVecEnv returns Dict observations, so we need a custom approach
+        # Instead, we'll modify the VecEnv to support action masking directly
+        # For now, let's try wrapping the VecEnv directly (ActionMasker might support VecEnv)
+        
+        # Actually, ActionMasker is designed for single environments, not VecEnv
+        # We need to use a different approach - create a wrapper that extracts masks from observations
+        # Or use a VecActionMasker if it exists, or create our own
+        
+        # Wrap with VecMonitor for logging
         monitor_dir = os.path.join(config.training.log_dir, "monitor")
         os.makedirs(monitor_dir, exist_ok=True)
-        self.vec_env = VecMonitor(vec_env_raw, monitor_dir)
+        vec_env_monitored = VecMonitor(vec_env_raw, monitor_dir)
+        
+        # Explicitly forward action_masks() method from underlying VecEnv
+        # VecMonitor doesn't automatically forward custom methods like action_masks
+        def action_masks(env_self):
+            """Forward action_masks from underlying VecEnv."""
+            # VecMonitor stores underlying VecEnv in .venv attribute
+            underlying = getattr(env_self, 'venv', None)
+            if underlying is not None and hasattr(underlying, 'action_masks'):
+                return underlying.action_masks()
+            # Fallback: try direct access to vec_env_raw (stored as reference)
+            if hasattr(env_self, '_vec_env_raw') and hasattr(env_self._vec_env_raw, 'action_masks'):
+                return env_self._vec_env_raw.action_masks()
+            # Final fallback: return all actions as valid
+            return np.ones((env_self.num_envs, env_self.action_space.n), dtype=bool)
+        
+        # Override has_attr to check for action_masks in both VecMonitor and underlying VecEnv
+        # This is needed because is_masking_supported() uses has_attr() to check for action_masks
+        original_has_attr = vec_env_monitored.has_attr
+        def has_attr(env_self, attr_name: str) -> bool:
+            """Check if attribute exists in VecMonitor or underlying VecEnv."""
+            # First check VecMonitor itself (for dynamically added methods like action_masks)
+            if hasattr(env_self, attr_name):
+                return True
+            # Then check underlying VecEnv using original has_attr
+            return original_has_attr(attr_name)
+        
+        import types
+        vec_env_monitored.action_masks = types.MethodType(action_masks, vec_env_monitored)
+        vec_env_monitored.has_attr = types.MethodType(has_attr, vec_env_monitored)
+        # Store reference to underlying env for action_masks method
+        vec_env_monitored._vec_env_raw = vec_env_raw
+        
+        self.vec_env = vec_env_monitored
         
         # Store reference to original env for direct access if needed
         # VecMonitor should forward attributes, but we keep reference just in case
@@ -360,8 +470,10 @@ class SelfPlayTraining:
                 with contextlib.redirect_stdout(StringIO()):
                     self.model = MaskablePPO.load(latest_model_path, env=self.vec_env)
                 # Enable TensorBoard logging for loaded model
-                self.model.tensorboard_log = config.training.log_dir
+                # Ensure tensorboard_log is set to absolute path
+                self.model.tensorboard_log = os.path.abspath(config.training.log_dir)
                 print(f"Successfully loaded model from {latest_model_path}")
+                print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
                 
                 # Extract step count from filename if possible
                 match = re.search(r"perudo_model_(\d+)_steps\.zip", os.path.basename(latest_model_path))
@@ -418,8 +530,10 @@ class SelfPlayTraining:
                 vf_coef=config.training.vf_coef,
                 max_grad_norm=config.training.max_grad_norm,
                 verbose=config.training.verbose,  # 1 = progress bar, 0 = no output
-                tensorboard_log=config.training.log_dir,  # Enable TensorBoard logging
+                tensorboard_log=os.path.abspath(config.training.log_dir),  # Enable TensorBoard logging (absolute path)
             )
+            
+            print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
         
         # Update opponent pool with current model
         # VecMonitor forwards attributes, but we also set it on raw env for safety
@@ -503,7 +617,7 @@ class SelfPlayTraining:
         """Load a model."""
         # Suppress SB3 wrapping messages
         with contextlib.redirect_stdout(StringIO()):
-            self.model = PPO.load(path, env=self.vec_env)
+            self.model = MaskablePPO.load(path, env=self.vec_env)
         self.vec_env.current_model = self.model
 
 

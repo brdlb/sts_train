@@ -10,13 +10,24 @@ from gymnasium import spaces
 from stable_baselines3.common.vec_env import VecEnv
 
 from .perudo_env import PerudoEnv
-from stable_baselines3 import PPO
 
 # Lazy import to avoid circular dependency
+if TYPE_CHECKING:
+    from sb3_contrib import MaskablePPO
+    PPO = MaskablePPO  # Alias for type hints
+else:
+    PPO = Any  # Runtime fallback
+
 try:
     from ..training.opponent_pool import OpponentPool
 except ImportError:
     OpponentPool = None  # type: ignore
+
+try:
+    from ..training.config import RewardConfig, DEFAULT_CONFIG
+except ImportError:
+    RewardConfig = None  # type: ignore
+    DEFAULT_CONFIG = None  # type: ignore
 
 
 class PerudoMultiAgentVecEnv(VecEnv):
@@ -41,6 +52,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
         random_num_players: bool = True,
         min_players: int = 3,
         max_players: int = 8,
+        reward_config: Optional[Any] = None,  # RewardConfig type
     ):
         """
         Initialize vectorized environment.
@@ -58,6 +70,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
             random_num_players: If True, randomly select num_players in each episode
             min_players: Minimum number of players (used when random_num_players=True)
             max_players: Maximum number of players (used when random_num_players=True)
+            reward_config: Reward configuration (uses DEFAULT_CONFIG.reward if not provided)
         """
         self.num_envs = num_envs
         self.random_num_players = random_num_players
@@ -74,6 +87,10 @@ class PerudoMultiAgentVecEnv(VecEnv):
         self.opponent_pool = opponent_pool
         self.current_model = current_model
 
+        # Use default reward config if not provided
+        if reward_config is None and DEFAULT_CONFIG is not None:
+            reward_config = DEFAULT_CONFIG.reward
+
         # Create environments with maximum number of players
         self.envs: List[PerudoEnv] = []
         for i in range(num_envs):
@@ -87,6 +104,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 min_players=min_players,
                 max_players=max_players,
                 max_history_length=max_history_length,  # Use provided max_history_length
+                reward_config=reward_config,
             )
             self.envs.append(env)
 
@@ -133,6 +151,9 @@ class PerudoMultiAgentVecEnv(VecEnv):
 
         # Current training step (for opponent sampling)
         self.current_step: int = 0
+
+        # Store last observations for action_masks() method (required by MaskablePPO)
+        self.last_obs: Optional[Dict[str, np.ndarray]] = None
 
         # Get observation and action spaces from first environment
         obs_space = self.envs[0].observation_space
@@ -266,10 +287,15 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 key: np.array([obs[key] for obs in observations_list])
                 for key in observations_list[0].keys()
             }
+            # Store observations for action_masks() method
+            self.last_obs = observations_dict
             return observations_dict
         else:
             # Array observation space: convert to array
-            return np.array(observations_list)
+            observations_array = np.array(observations_list)
+            # Store observations for action_masks() method
+            self.last_obs = observations_array
+            return observations_array
 
     def _sample_opponents_for_env(
         self,
@@ -343,18 +369,24 @@ class PerudoMultiAgentVecEnv(VecEnv):
             opponent_path = self.opponent_pool.get_snapshot_by_id(snapshot_id)
             if opponent_path and self.envs[env_idx] is not None:
                 # Load opponent model
-                opponent_model = self.opponent_pool.load_snapshot(
-                    opponent_path, self.envs[env_idx]
-                )
-                if opponent_model is not None:
-                    # opp_idx = slot_idx + 1 (because agents are 1-indexed)
-                    self.opponent_models[env_idx][slot_idx] = opponent_model
-                    self.opponent_paths[env_idx][slot_idx] = opponent_path
-                    # Update last used timestamp
-                    if snapshot_id in self.opponent_pool.snapshots:
-                        self.opponent_pool.snapshots[snapshot_id].last_used = current_step
-                else:
+                try:
+                    opponent_model = self.opponent_pool.load_snapshot(
+                        opponent_path, self.envs[env_idx]
+                    )
+                    if opponent_model is not None:
+                        # opp_idx = slot_idx + 1 (because agents are 1-indexed)
+                        self.opponent_models[env_idx][slot_idx] = opponent_model
+                        self.opponent_paths[env_idx][slot_idx] = opponent_path
+                        # Update last used timestamp
+                        if snapshot_id in self.opponent_pool.snapshots:
+                            self.opponent_pool.snapshots[snapshot_id].last_used = current_step
+                    else:
+                        # Failed to load snapshot, use current model instead
+                        self.opponent_models[env_idx][slot_idx] = self.current_model
+                        self.opponent_paths[env_idx][slot_idx] = None
+                except Exception as e:
                     # Failed to load snapshot, use current model instead
+                    print(f"Warning: Failed to load opponent snapshot {opponent_path}: {e}")
                     self.opponent_models[env_idx][slot_idx] = self.current_model
                     self.opponent_paths[env_idx][slot_idx] = None
             else:
@@ -389,13 +421,13 @@ class PerudoMultiAgentVecEnv(VecEnv):
         env_prefix = f"[Env {env_idx}] " if self.num_envs > 1 else ""
         
         print(f"\n{env_prefix}{'='*60}")
-        print(f"{env_prefix}НАЧАЛО НОВОЙ ИГРЫ")
+        print(f"{env_prefix}Start new game")
         print(f"{env_prefix}{'='*60}")
-        print(f"{env_prefix}Количество игроков: {num_players}")
-        print(f"{env_prefix}Состав участников:")
+        print(f"{env_prefix}Players num: {num_players}")
+        print(f"{env_prefix}Players are:")
         
         # Learning Agent (player 0)
-        print(f"{env_prefix}  Игрок 0: Learning Agent (текущая модель, шаг {current_step})")
+        print(f"{env_prefix}  Learning Agent")
         
         # Opponents (players 1, 2, ...)
         num_opponents = num_players - 1
@@ -408,7 +440,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 
                 if opponent_path is None:
                     # Using current model (self-play)
-                    print(f"{env_prefix}  Игрок {opp_idx}: Текущая модель (self-play)")
+                    print(f"{env_prefix}  Player {opp_idx}: Curent (self-play)")
                 else:
                     # Using snapshot - find snapshot metadata
                     snapshot_info = None
@@ -429,14 +461,14 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         elo = snapshot_info.elo if hasattr(snapshot_info, 'elo') else 0.0
                         games = snapshot_info.games_played if hasattr(snapshot_info, 'games_played') else 0
                         
-                        print(f"{env_prefix}  Игрок {opp_idx}: Снэпшот {snapshot_id_display} "
-                              f"(winrate: {winrate:.1f}%, ELO: {elo:.0f}, игр: {games})")
+                        print(f"{env_prefix}  Player {opp_idx}: Snapshot {snapshot_id_display} "
+                              f"(winrate: {winrate:.1f}%, ELO: {elo:.0f}, games played: {games})")
                     else:
                         # Snapshot exists but metadata not found
-                        print(f"{env_prefix}  Игрок {opp_idx}: Снэпшот {opponent_path}")
+                        print(f"{env_prefix}  Player {opp_idx}: Snapshot {opponent_path}")
             else:
                 # Slot index out of bounds, use current model
-                print(f"{env_prefix}  Игрок {opp_idx}: Текущая модель (self-play)")
+                print(f"{env_prefix}  Player {opp_idx}: Game mode (self-play)")
         
         print(f"{env_prefix}{'='*60}\n")
 
@@ -648,26 +680,28 @@ class PerudoMultiAgentVecEnv(VecEnv):
                     bid_count = getattr(env, 'episode_bid_count', 0)
                     challenge_count = getattr(env, 'episode_challenge_count', 0)
                     believe_count = getattr(env, 'episode_believe_count', 0)
+                    invalid_action_count = getattr(env, 'episode_invalid_action_count', 0)
                     winner = env.game_state.winner if hasattr(env.game_state, "winner") and env.game_state.winner is not None else -1
                     
                     # Print episode summary (before statistics are reset)
-                    winner_name = f"Игрок {winner}" if winner >= 0 else "Не определен"
+                    winner_name = f"Player {winner}" if winner >= 0 else "Not determined"
                     learning_agent_won = winner == 0
-                    win_status = "ПОБЕДА" if learning_agent_won else "ПОРАЖЕНИЕ"
+                    win_status = "VICTORY" if learning_agent_won else "DEFEAT"
                     
                     print(f"\n{'='*60}")
-                    print(f"ЭПИЗОД ЗАВЕРШЕН")
+                    print(f"EPISODE COMPLETED")
                     print(f"{'='*60}")
-                    print(f"Победитель: {winner_name} ({'Learning Agent' if learning_agent_won else 'Opponent'})")
-                    print(f"Результат для Learning Agent: {win_status}")
-                    print(f"Награда эпизода: {episode_reward:.2f}")
-                    print(f"Длина эпизода: {episode_length} шагов")
-                    print(f"Статистика действий:")
-                    print(f"  - Ставок сделано: {bid_count}")
-                    print(f"  - Вызовов сделано: {challenge_count}")
-                    print(f"  - Вызовов 'верить' (believe): {believe_count}")
+                    print(f"Winner: {winner_name} ({'Learning Agent' if learning_agent_won else 'Opponent'})")
+                    print(f"Result for Learning Agent: {win_status}")
+                    print(f"Episode reward: {episode_reward:.2f}")
+                    print(f"Episode length: {episode_length} steps")
+                    print(f"Action statistics:")
+                    print(f"  - Bids made: {bid_count}")
+                    print(f"  - Challenges made: {challenge_count}")
+                    print(f"  - Believe calls: {believe_count}")
+                    print(f"  - Invalid actions: {invalid_action_count}")
                     print(f"{'='*60}\n")
-                    
+                        
                     infos.append({
                         "game_over": True,
                         "winner": env.game_state.winner,
@@ -677,6 +711,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
                             "bid_count": bid_count,
                             "challenge_count": challenge_count,
                             "believe_count": believe_count,
+                            "invalid_action_count": invalid_action_count,
                             "winner": winner,
                         },
                     })
@@ -699,55 +734,30 @@ class PerudoMultiAgentVecEnv(VecEnv):
             
             env.set_active_player(current_learning_agent)
 
-            # Handle retry mechanism for invalid actions
-            max_retries = 1000  # Match max_invalid_attempts in env
-            retry_count = 0
-            obs = None
-            reward = 0.0
-            terminated = False
-            truncated_flag = False
-            info = {}
-            done = False
-            
-            while retry_count < max_retries:
-                obs, reward, terminated, truncated_flag, info = env.step(action)
-                done = terminated or truncated_flag
-                
-                # If retry is needed and episode not done, continue retrying
-                if info.get("retry", False) and not done:
-                    retry_count += 1
-                    # Get new action from model for retry (model should learn to avoid invalid actions)
-                    # Get fresh observation (though it shouldn't change on retry, but we get it for consistency)
-                    obs_for_retry = env.get_observation_for_player(current_learning_agent)
-                    if isinstance(obs_for_retry, dict):
-                        obs_for_predict = {key: np.array([value]) for key, value in obs_for_retry.items()}
-                    else:
-                        obs_for_predict = obs_for_retry.reshape(1, -1)
-                    
-                    # Get new action from model
-                    if self.current_model is not None:
-                        action, _ = self.current_model.predict(obs_for_predict, deterministic=False)
-                        action = int(action[0])
-                    # If model not available, continue with same action (shouldn't happen in normal training)
-                    continue
-                else:
-                    # Valid action or episode ended, break retry loop
-                    break
+            # Execute action (invalid actions now give -1 reward and pass turn, no retry)
+            obs, reward, terminated, truncated_flag, info = env.step(action)
+            done = terminated or truncated_flag
 
-            # Track learning agent's reward and length (only if episode not already done and not a retry)
-            # Note: env.step already handles not accumulating reward for retries
-            if not done and not info.get("retry", False):
+            # Track learning agent's reward and length (only if episode not already done)
+            # Get action validity from info to only count valid actions in episode_length
+            action_valid = info.get("action_info", {}).get("action_valid", True)
+            
+            if not done:
                 if all_learn:
                     # Track statistics for all agents in all_learn mode
                     if current_learning_agent not in self.all_agents_episode_reward[i]:
                         self.all_agents_episode_reward[i][current_learning_agent] = 0.0
                         self.all_agents_episode_length[i][current_learning_agent] = 0
                     self.all_agents_episode_reward[i][current_learning_agent] += reward
-                    self.all_agents_episode_length[i][current_learning_agent] += 1
+                    # Only increment episode_length for valid actions
+                    if action_valid:
+                        self.all_agents_episode_length[i][current_learning_agent] += 1
                 else:
                     # Normal mode: only track agent 0
                     self.learning_agent_episode_reward[i] += reward
-                    self.learning_agent_episode_length[i] += 1
+                    # Only increment episode_length for valid actions
+                    if action_valid:
+                        self.learning_agent_episode_length[i] += 1
             elif done:
                 # Episode just ended, accumulate this step's reward but mark as done
                 if all_learn:
@@ -755,10 +765,14 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         self.all_agents_episode_reward[i][current_learning_agent] = 0.0
                         self.all_agents_episode_length[i][current_learning_agent] = 0
                     self.all_agents_episode_reward[i][current_learning_agent] += reward
-                    self.all_agents_episode_length[i][current_learning_agent] += 1
+                    # Only increment episode_length for valid actions
+                    if action_valid:
+                        self.all_agents_episode_length[i][current_learning_agent] += 1
                 else:
                     self.learning_agent_episode_reward[i] += reward
-                    self.learning_agent_episode_length[i] += 1
+                    # Only increment episode_length for valid actions
+                    if action_valid:
+                        self.learning_agent_episode_length[i] += 1
                 self.episode_already_done[i] = True
 
             # Update current player
@@ -863,31 +877,33 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 if not self.episode_already_done[i]:
                     self.episode_already_done[i] = True
                 
-                # Get episode statistics from environment (bid_count, challenge_count, believe_count, winner)
+                # Get episode statistics from environment (bid_count, challenge_count, believe_count, invalid_action_count, winner)
                 # These are tracked for the entire episode, not just learning agent
                 # CRITICAL: Get statistics directly from env attributes BEFORE reset happens
                 # This ensures we get the correct values before they are reset to 0
                 bid_count = getattr(env, 'episode_bid_count', 0)
                 challenge_count = getattr(env, 'episode_challenge_count', 0)
                 believe_count = getattr(env, 'episode_believe_count', 0)
+                invalid_action_count = getattr(env, 'episode_invalid_action_count', 0)
                 winner = env.game_state.winner if hasattr(env.game_state, "winner") and env.game_state.winner is not None else -1
                 
                 # Print episode summary (before statistics are reset)
-                winner_name = f"Игрок {winner}" if winner >= 0 else "Не определен"
+                winner_name = f"Player {winner}" if winner >= 0 else "Not determined"
                 learning_agent_won = winner == 0
-                win_status = "ПОБЕДА" if learning_agent_won else "ПОРАЖЕНИЕ"
+                win_status = "VICTORY" if learning_agent_won else "DEFEAT"
                 
                 print(f"\n{'='*60}")
-                print(f"ЭПИЗОД ЗАВЕРШЕН")
+                print(f"EPISODE COMPLETED")
                 print(f"{'='*60}")
-                print(f"Победитель: {winner_name} ({'Learning Agent' if learning_agent_won else 'Opponent'})")
-                print(f"Результат для Learning Agent: {win_status}")
-                print(f"Награда эпизода: {learning_reward:.2f}")
-                print(f"Длина эпизода: {learning_length} шагов")
-                print(f"Статистика действий:")
-                print(f"  - Ставок сделано: {bid_count}")
-                print(f"  - Вызовов сделано: {challenge_count}")
-                print(f"  - Вызовов 'верить' (believe): {believe_count}")
+                print(f"Winner: {winner_name} ({'Learning Agent' if learning_agent_won else 'Opponent'})")
+                print(f"Result for Learning Agent: {win_status}")
+                print(f"Episode reward: {learning_reward:.2f}")
+                print(f"Episode length: {learning_length} steps")
+                print(f"Action statistics:")
+                print(f"  - Bids made: {bid_count}")
+                print(f"  - Challenges made: {challenge_count}")
+                print(f"  - Believe calls: {believe_count}")
+                print(f"  - Invalid actions: {invalid_action_count}")
                 print(f"{'='*60}\n")
                 
                 # Override episode info with learning agent's statistics, but keep episode statistics (bid_count, etc.)
@@ -897,6 +913,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
                     "bid_count": bid_count,
                     "challenge_count": challenge_count,
                     "believe_count": believe_count,
+                    "invalid_action_count": invalid_action_count,
                     "winner": winner,
                 }
                 info["episode_reward"] = learning_reward
@@ -940,6 +957,9 @@ class PerudoMultiAgentVecEnv(VecEnv):
         else:
             # Array observation space: convert to array
             observations = np.array(observations_list)
+
+        # Store observations for action_masks() method
+        self.last_obs = observations
 
         return (
             observations,
@@ -993,10 +1013,49 @@ class PerudoMultiAgentVecEnv(VecEnv):
         **method_kwargs,
     ) -> List:
         """Call method on environments."""
+        # Special handling for action_masks: return masks from VecEnv, not from individual envs
+        if method_name == "action_masks":
+            # Return action masks from VecEnv (this method is defined on VecEnv level)
+            masks = self.action_masks()
+            if indices is None:
+                indices = list(range(self.num_envs))
+            # Return masks for requested indices
+            return [masks[i] for i in indices]
+        
         if indices is None:
             indices = list(range(self.num_envs))
         return [
             getattr(self.envs[i], method_name)(*method_args, **method_kwargs)
             for i in indices
         ]
+
+    def action_masks(self) -> np.ndarray:
+        """
+        Get action masks for all environments.
+        
+        This method is required by MaskablePPO to support action masking.
+        It extracts action_mask from the last observations.
+        
+        Returns:
+            Array of action masks with shape (num_envs, action_space.n)
+        """
+        if self.last_obs is None:
+            # If no observations yet, return all actions as valid
+            return np.ones((self.num_envs, self.action_space.n), dtype=bool)
+        
+        # Extract action_mask from dict observations
+        if isinstance(self.last_obs, dict):
+            if "action_mask" in self.last_obs:
+                # action_mask should have shape (num_envs, action_space.n)
+                action_mask = self.last_obs["action_mask"]
+                # Ensure it's boolean
+                if action_mask.dtype != bool:
+                    action_mask = action_mask.astype(bool)
+                return action_mask
+            else:
+                # No action_mask in observations, return all actions as valid
+                return np.ones((self.num_envs, self.action_space.n), dtype=bool)
+        else:
+            # Array observations don't have action_mask, return all actions as valid
+            return np.ones((self.num_envs, self.action_space.n), dtype=bool)
 

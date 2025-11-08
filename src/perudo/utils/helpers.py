@@ -4,6 +4,7 @@ Helper functions for working with Perudo.
 
 from typing import List, Tuple, Optional, Dict
 import numpy as np
+from ..training.config import RewardConfig, DEFAULT_CONFIG
 
 
 def encode_bid(quantity: int, value: int, max_quantity: int = 30) -> int:
@@ -282,6 +283,7 @@ def calculate_reward(
     challenge_success: Optional[bool] = None,
     believe_success: Optional[bool] = None,
     dice_lost: int = 0,
+    reward_config: Optional[RewardConfig] = None,
 ) -> float:
     """
     Calculate reward for agent.
@@ -294,38 +296,42 @@ def calculate_reward(
         challenge_success: Whether challenge succeeded (if applicable)
         believe_success: Whether believe succeeded (if applicable)
         dice_lost: Number of dice lost
+        reward_config: Reward configuration (uses DEFAULT_CONFIG if not provided)
 
     Returns:
         Reward
     """
+    if reward_config is None:
+        reward_config = DEFAULT_CONFIG.reward
+
     reward = 0.0
 
     # Reward for winning game
     if game_over and winner == player_id:
-        reward += 10.0
+        reward += reward_config.win_reward
 
     # Penalty for losing dice
     if dice_lost > 0:
-        reward -= 2.0 * dice_lost
+        reward += reward_config.dice_lost_penalty * dice_lost
 
     # Intermediate rewards for bluffs and challenges
     if action_type == "challenge" and challenge_success is not None:
         if challenge_success:
             # Successfully caught someone's bluff
-            reward += 1.0
+            reward += reward_config.challenge_success_reward
         else:
             # Unsuccessful challenge that led to dice loss
             if dice_lost > 0:
-                reward -= 1.0
+                reward += reward_config.challenge_failure_penalty
 
     if action_type == "believe" and believe_success is not None:
         if believe_success:
             # Successfully called believe (caught someone's bluff)
-            reward += 1.0
+            reward += reward_config.believe_success_reward
         else:
             # Unsuccessful believe that led to dice loss
             if dice_lost > 0:
-                reward -= 1.0
+                reward += reward_config.believe_failure_penalty
 
     # Note: Successful bluff detection (bid that was never challenged) 
     # is handled separately in the environment when round ends

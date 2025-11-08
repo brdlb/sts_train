@@ -17,6 +17,7 @@ from ..utils.helpers import (
     decode_bid,
     create_action_mask,
 )
+from ..training.config import RewardConfig, DEFAULT_CONFIG
 
 class PerudoEnv(gym.Env):
     """Gymnasium environment for Perudo game."""
@@ -35,6 +36,7 @@ class PerudoEnv(gym.Env):
         random_num_players: bool = True,
         min_players: int = 3,
         max_players: int = 8,
+        reward_config: Optional[RewardConfig] = None,
     ):
         """
         Initialize Perudo environment.
@@ -50,8 +52,12 @@ class PerudoEnv(gym.Env):
             random_num_players: If True, randomly select num_players in each episode
             min_players: Minimum number of players (used when random_num_players=True)
             max_players: Maximum number of players (used when random_num_players=True)
+            reward_config: Reward configuration (uses DEFAULT_CONFIG.reward if not provided)
         """
         super().__init__()
+
+        # Store reward configuration
+        self.reward_config = reward_config if reward_config is not None else DEFAULT_CONFIG.reward
 
         # Store parameters for random player selection
         self.random_num_players = random_num_players
@@ -131,11 +137,11 @@ class PerudoEnv(gym.Env):
         self.episode_bid_count = 0  # Total number of bids made in episode
         self.episode_challenge_count = 0  # Total number of challenges made in episode
         self.episode_believe_count = 0  # Total number of believe calls made in episode
+        self.episode_invalid_action_count = 0  # Total number of invalid actions made by learning agent in episode
         
-        # Track invalid action attempts for retry mechanism
-        self.invalid_action_attempts = 0  # Count of consecutive invalid actions for current player
-        self.max_invalid_attempts = 1000  # Safety limit to prevent infinite loops
-        self.invalid_action_penalty_accumulated = 0.0  # Accumulated penalty from invalid actions
+        # Track invalid action attempts (for compatibility, not used for retry anymore)
+        self.invalid_action_attempts = 0
+        self.invalid_action_penalty_accumulated = 0.0
 
     def reset(
         self, seed: Optional[int] = None, options: Optional[Dict] = None
@@ -192,6 +198,7 @@ class PerudoEnv(gym.Env):
         self.episode_bid_count = 0
         self.episode_challenge_count = 0
         self.episode_believe_count = 0
+        self.episode_invalid_action_count = 0
         
         # Reset invalid action tracking
         self.invalid_action_attempts = 0
@@ -223,6 +230,7 @@ class PerudoEnv(gym.Env):
                     "bid_count": self.episode_bid_count,
                     "challenge_count": self.episode_challenge_count,
                     "believe_count": self.episode_believe_count,
+                    "invalid_action_count": self.episode_invalid_action_count,
                     "winner": winner,
                 },
                 "episode_reward": self.episode_reward,
@@ -238,6 +246,25 @@ class PerudoEnv(gym.Env):
             # If it's not agent's turn, move to next player
             observation = self._get_observation(self.active_player_id)
             return observation, 0.0, False, False, {"error": "Not player's turn"}
+
+        # Check action masking for learning agent (player_id=0)
+        # This helps diagnose if MaskablePPO is properly using action masks
+        if self.active_player_id == 0:
+            # Get available actions and create mask
+            available_actions = PerudoRules.get_available_actions(self.game_state, self.active_player_id)
+            action_mask = create_action_mask(
+                available_actions, self.action_space.n, self.max_quantity
+            )
+            # Check if the selected action is allowed by the mask
+            if not action_mask[action]:
+                import warnings
+                warnings.warn(
+                    f"Learning agent (player 0) selected invalid action {action} "
+                    f"(type: {action_type}, params: {param1}, {param2}). "
+                    f"Action mask indicates this action should be masked. "
+                    f"This suggests MaskablePPO may not be properly using action masks.",
+                    UserWarning
+                )
 
         # Execute action
         reward = 0.0
@@ -259,14 +286,6 @@ class PerudoEnv(gym.Env):
                     self.active_player_id, quantity, value
                 )
                 if action_valid:
-                    # Valid action - compensate for previous invalid attempts
-                    if self.invalid_action_attempts > 0:
-                        # Calculate compensation: sum of all penalties, slightly less than the total penalty
-                        compensation = self.invalid_action_penalty_accumulated - 0.1
-                        reward += compensation
-                        self.invalid_action_attempts = 0  # Reset counter
-                        self.invalid_action_penalty_accumulated = 0.0
-                    
                     # Track that agent made a bid this round
                     if self.active_player_id == 0:
                         self.agent_bid_this_round = True
@@ -275,34 +294,29 @@ class PerudoEnv(gym.Env):
                     self.game_state.next_player()
                     # Small negative reward for bidding to encourage finishing the round
                     reward += calculate_reward(
-                        "bid", False, -1, self.active_player_id, dice_lost=0
-                    ) - 0.01
+                        "bid", False, -1, self.active_player_id, dice_lost=0,
+                        reward_config=self.reward_config
+                    ) + self.reward_config.bid_small_penalty
             else:
-                # Invalid action - accumulate penalty and retry
-                self.invalid_action_attempts += 1
-                penalty = -self.invalid_action_attempts  # Progressive penalty: -1, -2, -3, ...
-                self.invalid_action_penalty_accumulated += abs(penalty)
-                reward = penalty
+                # Invalid action - give penalty and pass turn
+                reward = self.reward_config.invalid_action_penalty
+                action_valid = False
+                retry_needed = False
+                self.game_state.next_player()
+                # Reset invalid action attempts counter
+                self.invalid_action_attempts = 0
+                self.invalid_action_penalty_accumulated = 0.0
                 
-                # Safety check: prevent infinite loops
-                if self.invalid_action_attempts >= self.max_invalid_attempts:
-                    # Force move to next player after max attempts
-                    self.game_state.next_player()
-                    self.invalid_action_attempts = 0
-                    self.invalid_action_penalty_accumulated = 0.0
-                    if self.game_state.game_over:
-                        reward = calculate_reward(
-                            "bid",
-                            self.game_state.game_over,
-                            self.game_state.winner or -1,
-                            self.active_player_id,
-                            dice_lost=0,
-                        )
-                    action_valid = False
-                else:
-                    # Don't advance game state - will retry same player
-                    action_valid = False
-                    retry_needed = True
+                # Check if game ended after passing turn
+                if self.game_state.game_over:
+                    reward = calculate_reward(
+                        "bid",
+                        self.game_state.game_over,
+                        self.game_state.winner or -1,
+                        self.active_player_id,
+                        dice_lost=0,
+                        reward_config=self.reward_config,
+                    )
 
         elif action_type == "challenge":
             # Challenge previous player
@@ -310,13 +324,6 @@ class PerudoEnv(gym.Env):
                 self.game_state, self.active_player_id
             )
             if can_challenge:
-                # Valid action - compensate for previous invalid attempts
-                if self.invalid_action_attempts > 0:
-                    # Calculate compensation: sum of all penalties, slightly less than the total penalty
-                    compensation = self.invalid_action_penalty_accumulated - 0.1
-                    reward += compensation
-                    self.invalid_action_attempts = 0  # Reset counter
-                    self.invalid_action_penalty_accumulated = 0.0
                 challenge_success, actual_count, bid_quantity = (
                     self.game_state.challenge_bid(self.active_player_id)
                 )
@@ -366,6 +373,7 @@ class PerudoEnv(gym.Env):
                     self.active_player_id,
                     challenge_success=challenge_success,
                     dice_lost=dice_lost if loser_id == self.active_player_id else 0,
+                    reward_config=self.reward_config,
                 )
                 # Count challenge action (for all players, not just learning agent)
                 self.episode_challenge_count += 1
@@ -375,37 +383,31 @@ class PerudoEnv(gym.Env):
                 # If agent successfully defended their bid (opponent challenged and failed),
                 # store deferred reward for agent (will be given on agent's next turn)
                 elif agent_defended_bid:
-                    # Agent gets +2.5 reward for successfully defending their risky bid (reduced from +5.0)
+                    # Agent gets reward for successfully defending their risky bid
                     # This reward will be added when agent makes their next action
-                    self.agent_deferred_reward += 2.5
+                    self.agent_deferred_reward += self.reward_config.defend_bid_reward_challenge
                 action_valid = True
             else:
-                # Invalid challenge - accumulate penalty and retry
-                self.invalid_action_attempts += 1
-                penalty = -self.invalid_action_attempts  # Progressive penalty: -1, -2, -3, ...
-                self.invalid_action_penalty_accumulated += abs(penalty)
-                reward = penalty
+                # Invalid challenge - give penalty and pass turn
+                reward = self.reward_config.invalid_action_penalty
+                action_valid = False
+                retry_needed = False
+                self.game_state.next_player()
+                # Reset invalid action attempts counter
+                self.invalid_action_attempts = 0
+                self.invalid_action_penalty_accumulated = 0.0
                 
-                # Safety check: prevent infinite loops
-                if self.invalid_action_attempts >= self.max_invalid_attempts:
-                    # Force move to next player after max attempts
-                    self.game_state.next_player()
-                    self.invalid_action_attempts = 0
-                    self.invalid_action_penalty_accumulated = 0.0
-                    if self.game_state.game_over:
-                        reward = calculate_reward(
-                            "challenge",
-                            self.game_state.game_over,
-                            self.game_state.winner or -1,
-                            self.active_player_id,
-                            challenge_success=False,
-                            dice_lost=0,
-                        )
-                    action_valid = False
-                else:
-                    # Don't advance game state - will retry same player
-                    action_valid = False
-                    retry_needed = True
+                # Check if game ended after passing turn
+                if self.game_state.game_over:
+                    reward = calculate_reward(
+                        "challenge",
+                        self.game_state.game_over,
+                        self.game_state.winner or -1,
+                        self.active_player_id,
+                        challenge_success=False,
+                        dice_lost=0,
+                        reward_config=self.reward_config,
+                    )
 
         elif action_type == "believe":
             # Call believe
@@ -413,13 +415,6 @@ class PerudoEnv(gym.Env):
                 self.game_state, self.active_player_id
             )
             if can_believe:
-                # Valid action - compensate for previous invalid attempts
-                if self.invalid_action_attempts > 0:
-                    # Calculate compensation: sum of all penalties, slightly less than the total penalty
-                    compensation = self.invalid_action_penalty_accumulated - 0.1
-                    reward += compensation
-                    self.invalid_action_attempts = 0  # Reset counter
-                    self.invalid_action_penalty_accumulated = 0.0
                 believe_success, actual_count = self.game_state.call_believe(
                     self.active_player_id
                 )
@@ -500,6 +495,7 @@ class PerudoEnv(gym.Env):
                     self.active_player_id,
                     believe_success=believe_success,
                     dice_lost=dice_lost if (loser_id is not None and loser_id == self.active_player_id) else 0,
+                    reward_config=self.reward_config,
                 )
                 # Count believe action (for all players, not just learning agent)
                 self.episode_believe_count += 1
@@ -509,37 +505,31 @@ class PerudoEnv(gym.Env):
                 # If agent successfully defended their bid (opponent called believe and failed),
                 # store deferred reward for agent (will be given on agent's next turn)
                 elif agent_defended_bid:
-                    # Agent gets +5.0 reward for successfully defending their risky bid
+                    # Agent gets reward for successfully defending their risky bid
                     # This reward will be added when agent makes their next action
-                    self.agent_deferred_reward += 5.0
+                    self.agent_deferred_reward += self.reward_config.defend_bid_reward_believe
                 action_valid = True
             else:
-                # Invalid believe - accumulate penalty and retry
-                self.invalid_action_attempts += 1
-                penalty = -self.invalid_action_attempts  # Progressive penalty: -1, -2, -3, ...
-                self.invalid_action_penalty_accumulated += abs(penalty)
-                reward = penalty
+                # Invalid believe - give penalty and pass turn
+                reward = self.reward_config.invalid_action_penalty
+                action_valid = False
+                retry_needed = False
+                self.game_state.next_player()
+                # Reset invalid action attempts counter
+                self.invalid_action_attempts = 0
+                self.invalid_action_penalty_accumulated = 0.0
                 
-                # Safety check: prevent infinite loops
-                if self.invalid_action_attempts >= self.max_invalid_attempts:
-                    # Force move to next player after max attempts
-                    self.game_state.next_player()
-                    self.invalid_action_attempts = 0
-                    self.invalid_action_penalty_accumulated = 0.0
-                    if self.game_state.game_over:
-                        reward = calculate_reward(
-                            "believe",
-                            self.game_state.game_over,
-                            self.game_state.winner or -1,
-                            self.active_player_id,
-                            believe_success=False,
-                            dice_lost=0,
-                        )
-                    action_valid = False
-                else:
-                    # Don't advance game state - will retry same player
-                    action_valid = False
-                    retry_needed = True
+                # Check if game ended after passing turn
+                if self.game_state.game_over:
+                    reward = calculate_reward(
+                        "believe",
+                        self.game_state.game_over,
+                        self.game_state.winner or -1,
+                        self.active_player_id,
+                        believe_success=False,
+                        dice_lost=0,
+                        reward_config=self.reward_config,
+                    )
 
         # Save action information
         self.last_action_info = {
@@ -591,8 +581,8 @@ class PerudoEnv(gym.Env):
         # ВАЖНО: накапливаем статистику только для learning agent (player_id=0)
         # В vec_env только learning agent делает ходы через этот метод для сбора статистики
         # Оппоненты играют отдельно и их награды не должны учитываться в статистике learning agent
-        # НЕ накапливаем статистику при retry (retry - это не настоящий шаг, это повторная попытка)
-        if self.active_player_id == 0 and not retry_needed:
+        # Invalid actions now give -1 reward and pass turn (no retry mechanism)
+        if self.active_player_id == 0:
             # Add any deferred reward for agent (e.g., from successfully defending bid)
             if self.agent_deferred_reward != 0.0:
                 reward += self.agent_deferred_reward
@@ -603,7 +593,13 @@ class PerudoEnv(gym.Env):
             reward += dice_advantage_reward
             
             self.episode_reward += reward
-            self.episode_length += 1
+            # Only increment episode_length for valid actions
+            # This ensures episode_length matches the sum of valid actions (bid_count + challenge_count + believe_count)
+            if action_valid:
+                self.episode_length += 1
+            else:
+                # Track invalid actions for debugging
+                self.episode_invalid_action_count += 1
 
         # Check game over
         terminated = self.game_state.game_over
@@ -638,6 +634,7 @@ class PerudoEnv(gym.Env):
                 "bid_count": self.episode_bid_count,
                 "challenge_count": self.episode_challenge_count,
                 "believe_count": self.episode_believe_count,
+                "invalid_action_count": self.episode_invalid_action_count,
                 "winner": self.game_state.winner if hasattr(self.game_state, "winner") and self.game_state.winner is not None else -1,
             }
             # Also keep old format for backward compatibility with custom callbacks
@@ -747,7 +744,7 @@ class PerudoEnv(gym.Env):
         # Check if agent (player 0) lost dice in this round
         agent_lost_dice = (loser_id == agent_id and dice_lost > 0)
 
-        # -1.5 for unsuccessful bid that led to dice loss
+        # Penalty for unsuccessful bid that led to dice loss
         # (agent made a bid that was successfully challenged by opponent)
         # Only apply if the current action is NOT agent's challenge/believe
         # (because those are already penalized in calculate_reward)
@@ -756,16 +753,15 @@ class PerudoEnv(gym.Env):
             is_agent_action = (action_type in ["challenge", "believe"] and self.active_player_id == agent_id)
             if not is_agent_action:
                 # Agent's bid was successfully challenged by opponent
-                reward -= 1.5
+                reward += self.reward_config.unsuccessful_bid_penalty
 
-        # +2.0 reward for each round in which the agent did not lose a die (increased from +0.5)
+        # Reward for each round in which the agent did not lose a die
         if not agent_lost_dice:
-            reward += 2.0
+            reward += self.reward_config.round_no_dice_lost_reward
             
             if self.agent_bid_this_round:
                 # Agent successfully bluffed (bid was correct or never challenged)
-                # Increased from +1.5 to +3.0
-                reward += 3.0
+                reward += self.reward_config.successful_bluff_reward
 
         return reward
 
@@ -774,7 +770,7 @@ class PerudoEnv(gym.Env):
         Calculate reward for having more dice than average opponents and being leader.
         
         Returns:
-            Reward based on dice advantage (+0.5 per die advantage) plus bonus for being leader
+            Reward based on dice advantage (configurable per die advantage) plus bonus for being leader
         """
         agent_id = 0
         if agent_id >= len(self.game_state.player_dice_count):
@@ -796,15 +792,15 @@ class PerudoEnv(gym.Env):
         
         reward = 0.0
         
-        # Reward: +0.5 per die advantage (capped at reasonable maximum)
+        # Reward per die advantage (capped at reasonable maximum)
         if dice_advantage > 0:
-            reward += 0.5 * min(dice_advantage, 5.0)  # Cap at 5 dice advantage
+            reward += self.reward_config.dice_advantage_reward * min(dice_advantage, self.reward_config.dice_advantage_max)
         
         # Bonus reward for being leader (having more dice than all opponents)
         if opponent_dice_counts:
             max_opponent_dice = max(opponent_dice_counts)
             if agent_dice > max_opponent_dice:
-                # Additional +2.0 reward for being the leader
-                reward += 2.0
+                # Additional reward for being the leader
+                reward += self.reward_config.leader_bonus
         
         return reward

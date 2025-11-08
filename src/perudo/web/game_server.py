@@ -11,6 +11,7 @@ import json
 from ..game.perudo_env import PerudoEnv
 from ..agents.rl_agent import RLAgent
 from ..training.opponent_pool import OpponentPool
+from ..training.config import DEFAULT_CONFIG
 from .database.operations import (
     create_game,
     finish_game,
@@ -51,6 +52,7 @@ class GameSession:
             max_quantity=web_config.max_quantity,
             history_length=web_config.history_length,
             max_history_length=web_config.transformer_history_length,
+            reward_config=DEFAULT_CONFIG.reward,
         )
 
         # Reset environment

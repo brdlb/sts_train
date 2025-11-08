@@ -10,7 +10,8 @@ import os
 from pathlib import Path
 
 from src.perudo.training.opponent_pool import OpponentPool, OpponentSnapshot
-from stable_baselines3 import PPO
+from sb3_contrib import MaskablePPO
+from sb3_contrib.common.wrappers import ActionMasker
 from stable_baselines3.common.vec_env import DummyVecEnv
 from src.perudo.game.perudo_env import PerudoEnv
 
@@ -51,10 +52,16 @@ def test_save_snapshot():
             snapshot_freq=100,  # Save every 100 steps
         )
         
-        # Create a dummy PPO model
-        env = PerudoEnv(num_players=4)
-        vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MultiInputPolicy", vec_env, verbose=0)
+        # Create a dummy MaskablePPO model
+        def make_env():
+            env = PerudoEnv(num_players=4)
+            def mask_fn(env):
+                obs, _ = env.reset()
+                return obs["action_mask"].astype(bool)
+            env = ActionMasker(env, mask_fn=mask_fn)
+            return env
+        vec_env = DummyVecEnv([make_env])
+        model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
         
         # Save snapshot at step that doesn't match freq
         snapshot_path = pool.save_snapshot(model, step=50)
@@ -88,9 +95,15 @@ def test_sample_opponent():
         )
         
         # Create dummy snapshots
-        env = PerudoEnv(num_players=4)
-        vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MultiInputPolicy", vec_env, verbose=0)
+        def make_env():
+            env = PerudoEnv(num_players=4)
+            def mask_fn(env):
+                obs, _ = env.reset()
+                return obs["action_mask"].astype(bool)
+            env = ActionMasker(env, mask_fn=mask_fn)
+            return env
+        vec_env = DummyVecEnv([make_env])
+        model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
         
         # Save a few snapshots
         for step in [1, 2, 3]:
@@ -122,9 +135,15 @@ def test_update_winrate():
         )
         
         # Create dummy snapshot
-        env = PerudoEnv(num_players=4)
-        vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MultiInputPolicy", vec_env, verbose=0)
+        def make_env():
+            env = PerudoEnv(num_players=4)
+            def mask_fn(env):
+                obs, _ = env.reset()
+                return obs["action_mask"].astype(bool)
+            env = ActionMasker(env, mask_fn=mask_fn)
+            return env
+        vec_env = DummyVecEnv([make_env])
+        model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
         
         snapshot_path = pool.save_snapshot(model, step=1)
         
@@ -190,9 +209,15 @@ def test_cleanup_snapshots():
         )
         
         # Create dummy snapshots
-        env = PerudoEnv(num_players=4)
-        vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MultiInputPolicy", vec_env, verbose=0)
+        def make_env():
+            env = PerudoEnv(num_players=4)
+            def mask_fn(env):
+                obs, _ = env.reset()
+                return obs["action_mask"].astype(bool)
+            env = ActionMasker(env, mask_fn=mask_fn)
+            return env
+        vec_env = DummyVecEnv([make_env])
+        model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
         
         # Save more snapshots than max_pool_size
         for step in range(1, 10):
@@ -220,19 +245,26 @@ def test_load_snapshot():
         )
         
         # Create and save snapshot
-        env = PerudoEnv(num_players=4)
-        vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MultiInputPolicy", vec_env, verbose=0)
+        def make_env():
+            env = PerudoEnv(num_players=4)
+            def mask_fn(env):
+                obs, _ = env.reset()
+                return obs["action_mask"].astype(bool)
+            env = ActionMasker(env, mask_fn=mask_fn)
+            return env
+        vec_env = DummyVecEnv([make_env])
+        model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
         
         snapshot_path = pool.save_snapshot(model, step=1)
         
         if snapshot_path and os.path.exists(snapshot_path):
-            # Load snapshot
-            loaded_model = pool.load_snapshot(snapshot_path, env)
+            # Load snapshot - need base env without ActionMasker wrapper
+            base_env = PerudoEnv(num_players=4)
+            loaded_model = pool.load_snapshot(snapshot_path, base_env)
             
             # Should load successfully
             assert loaded_model is not None
-            assert isinstance(loaded_model, PPO)
+            assert isinstance(loaded_model, MaskablePPO)
         
         vec_env.close()
         
@@ -253,9 +285,15 @@ def test_get_best_snapshot():
         )
         
         # Create dummy snapshots
-        env = PerudoEnv(num_players=4)
-        vec_env = DummyVecEnv([lambda: env])
-        model = PPO("MultiInputPolicy", vec_env, verbose=0)
+        def make_env():
+            env = PerudoEnv(num_players=4)
+            def mask_fn(env):
+                obs, _ = env.reset()
+                return obs["action_mask"].astype(bool)
+            env = ActionMasker(env, mask_fn=mask_fn)
+            return env
+        vec_env = DummyVecEnv([make_env])
+        model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
         
         # Save a few snapshots
         snapshot_paths = []

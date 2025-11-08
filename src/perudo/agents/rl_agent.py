@@ -7,7 +7,7 @@ import contextlib
 from io import StringIO
 from typing import Optional
 import torch
-from stable_baselines3 import PPO
+from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv
 
@@ -45,7 +45,7 @@ class RLAgent(BaseAgent):
         self,
         agent_id: int,
         env: PerudoEnv,
-        model: Optional[PPO] = None,
+        model: Optional[MaskablePPO] = None,
         policy: str = "MlpPolicy",
         device: Optional[str] = None,  # If None, auto-detects GPU with CPU fallback
         learning_rate: float = 3e-4,
@@ -66,7 +66,7 @@ class RLAgent(BaseAgent):
         Args:
             agent_id: Unique agent ID
             env: Perudo environment
-            model: Existing PPO model (if any)
+            model: Existing MaskablePPO model (if any)
             policy: Policy type
             device: Device string (e.g., "cpu", "cuda"). If None, auto-detects GPU with CPU fallback
             learning_rate: Learning rate
@@ -99,8 +99,8 @@ class RLAgent(BaseAgent):
             # Determine device for training (GPU with CPU fallback)
             device_str = get_device(device)
 
-            # Create PPO model
-            self.model = PPO(
+            # Create MaskablePPO model
+            self.model = MaskablePPO(
                 policy=policy,
                 env=self.vec_env,
                 device=device_str,
@@ -188,7 +188,7 @@ class RLAgent(BaseAgent):
         """
         # Suppress SB3 wrapping messages
         with contextlib.redirect_stdout(StringIO()):
-            self.model = PPO.load(path, env=self.env)
+            self.model = MaskablePPO.load(path, env=self.env)
 
     def reset(self):
         """Reset agent state."""
