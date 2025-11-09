@@ -142,18 +142,45 @@ class RLAgent(BaseAgent):
         if self.model is None:
             raise RuntimeError("Model is not loaded. Call load() method first.")
         
-        # Convert observation to format for SB3
-        # For Dict observations, SB3 expects a dict with batched arrays
-        # For array observations, add batch dimension
+        # Extract action mask from observation if available
+        # This is critical for MaskablePPO to avoid invalid actions
+        action_masks = None
         if isinstance(observation, dict):
             # Dict observation: batch each key
             obs_dict = {
                 key: np.array([value]) if isinstance(value, np.ndarray) else [value]
                 for key, value in observation.items()
             }
-            action, _ = self.model.predict(obs_dict, deterministic=deterministic)
+            
+            # Extract action_mask if present in observation
+            if "action_mask" in observation:
+                mask = observation["action_mask"]
+                # Ensure mask is boolean and properly formatted
+                if isinstance(mask, np.ndarray):
+                    mask = mask.astype(bool)
+                    # Flatten if needed (should be 1D already)
+                    if mask.ndim > 1:
+                        mask = mask.flatten()
+                    # Batch the mask: shape (1, action_space.n) for predict()
+                    # MaskablePPO.predict() expects action_masks with shape (batch_size, action_space.n)
+                    action_masks = np.array([mask])
+                elif isinstance(mask, (list, tuple)):
+                    # Convert list/tuple to numpy array
+                    mask = np.array(mask, dtype=bool)
+                    if mask.ndim > 1:
+                        mask = mask.flatten()
+                    action_masks = np.array([mask])
+            
+            # Predict with action mask if available
+            # MaskablePPO.predict() accepts action_masks parameter to mask invalid actions
+            if action_masks is not None:
+                action, _ = self.model.predict(obs_dict, deterministic=deterministic, action_masks=action_masks)
+            else:
+                # No mask available, predict without masking (should not happen in normal usage)
+                action, _ = self.model.predict(obs_dict, deterministic=deterministic)
         else:
             # Array observation: add batch dimension
+            # Note: Array observations don't contain action_mask, so masking is not possible
             obs_array = observation.reshape(1, -1)
             action, _ = self.model.predict(obs_array, deterministic=deterministic)
         
@@ -236,11 +263,29 @@ class RLAgent(BaseAgent):
                 # The env parameter is used for validation (observation_space, action_space)
                 self.model = MaskablePPO.load(path, env=self.env, device=device)
             except Exception as e:
-                raise ValueError(
-                    f"Failed to load model from {path}: {str(e)}\n"
-                    f"Make sure the model was trained with the same environment configuration "
-                    f"(observation_space, action_space, max_history_length, etc.)"
-                ) from e
+                # Extract observation space info for better error message
+                env_obs_space = self.env.observation_space
+                if hasattr(env_obs_space, 'spaces') and 'static_info' in env_obs_space.spaces:
+                    static_info_size = env_obs_space.spaces['static_info'].shape[0]
+                    # Calculate max_num_players from static_info size: (static_info_size - 9) / 3
+                    max_num_players = (static_info_size - 9) // 3
+                    raise ValueError(
+                        f"Failed to load model from {path}: {str(e)}\n"
+                        f"Make sure the model was trained with the same environment configuration:\n"
+                        f"  - observation_space (current static_info size: {static_info_size}, "
+                        f"which corresponds to max_num_players={max_num_players})\n"
+                        f"  - action_space\n"
+                        f"  - max_history_length\n"
+                        f"  - random_num_players and max_players (affect observation space size)\n"
+                        f"Current environment uses max_num_players={max_num_players} "
+                        f"(calculated from static_info size)."
+                    ) from e
+                else:
+                    raise ValueError(
+                        f"Failed to load model from {path}: {str(e)}\n"
+                        f"Make sure the model was trained with the same environment configuration "
+                        f"(observation_space, action_space, max_history_length, etc.)"
+                    ) from e
 
     def reset(self):
         """Reset agent state."""

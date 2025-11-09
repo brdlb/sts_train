@@ -7,6 +7,9 @@ from typing import Dict, Optional, List, Tuple, Any
 from datetime import datetime
 import numpy as np
 import json
+import os
+import re
+import traceback
 
 from ..game.perudo_env import PerudoEnv
 from ..agents.rl_agent import RLAgent
@@ -21,8 +24,6 @@ from .database.operations import (
 )
 from .database.database import SessionLocal
 from .config import web_config
-import os
-import traceback
 
 
 def validate_environment_config() -> None:
@@ -66,6 +67,23 @@ def validate_environment_config() -> None:
             f"Environment total_dice_values ({web_config.total_dice_values}) "
             f"does not match training total_dice_values ({game_config.total_dice_values})."
         )
+    
+    # Check random_num_players matches (important for observation space size)
+    # Note: This is checked indirectly through environment creation, but we validate here for clarity
+    # The actual observation space size depends on random_num_players and max_players
+    if game_config.random_num_players:
+        # If random_num_players=True, max_num_players = max(max_players, num_players)
+        # Observation space size = 3 * max_num_players + 9
+        expected_max_players = max(game_config.max_players, game_config.num_players)
+    else:
+        # If random_num_players=False, max_num_players = num_players
+        # Observation space size = 3 * num_players + 9
+        expected_max_players = game_config.num_players
+    
+    # Calculate expected static_info size
+    expected_static_info_size = 3 * expected_max_players + 9
+    # Note: We can't check this directly here since environment isn't created yet,
+    # but this validation ensures the configuration is correct before environment creation
 
 
 class GameSession:
@@ -105,6 +123,7 @@ class GameSession:
 
         # Create environment (4 players: human at position 0, 3 AI at positions 1, 2, 3)
         # Environment parameters must match training configuration
+        game_config = DEFAULT_CONFIG.game
         self.env = PerudoEnv(
             num_players=4,
             dice_per_player=web_config.dice_per_player,
@@ -112,6 +131,9 @@ class GameSession:
             max_quantity=web_config.max_quantity,
             history_length=web_config.history_length,
             max_history_length=web_config.transformer_history_length,
+            random_num_players=game_config.random_num_players,  # Must match training config
+            min_players=game_config.min_players,  # Must match training config
+            max_players=game_config.max_players,  # Must match training config
             reward_config=DEFAULT_CONFIG.reward,
         )
 
@@ -185,6 +207,10 @@ class GameSession:
         self.turn_number = 0
         self.game_over = False
 
+        # Extended action history with consequences
+        # Each entry contains: player_id, action_type, action_data, consequences
+        self.extended_action_history: List[Dict[str, Any]] = []
+
         # Save initial state to DB
         self._save_state_to_db()
 
@@ -193,28 +219,135 @@ class GameSession:
         Get public game state (what human player can see).
 
         Returns:
-            Dictionary with game state
+            Dictionary with game state (JSON-serializable)
         """
         game_state = self.env.game_state
         public_info = game_state.get_public_info()
 
-        # Get player's own dice
-        player_dice = self.env.get_observation_for_player(0)  # Human is player 0
+        # Get player's own dice observation (contains numpy arrays)
+        player_dice_obs = self.env.get_observation_for_player(0)  # Human is player 0
+        
+        # Convert numpy arrays to Python lists for JSON serialization
+        # Exclude action_mask as it's not needed on frontend
+        player_dice = {
+            "bid_history": player_dice_obs["bid_history"].tolist() if hasattr(player_dice_obs["bid_history"], "tolist") else player_dice_obs["bid_history"],
+            "static_info": player_dice_obs["static_info"].tolist() if hasattr(player_dice_obs["static_info"], "tolist") else player_dice_obs["static_info"],
+        }
+        
+        # Also get the actual dice values (not just observation)
+        # This is more useful for the frontend to display player's dice
+        actual_player_dice = self.env.game_state.get_player_dice(0)
+        player_dice["dice_values"] = list(actual_player_dice)
+        
+        # Convert bid_history tuples to lists for JSON serialization
+        bid_history_serializable = [
+            self._serialize_value(bid) for bid in game_state.bid_history
+        ]
+        
+        # Convert current_bid tuple to list if it exists
+        current_bid_serializable = self._serialize_value(game_state.current_bid)
+
+        # Serialize winner (may be numpy scalar or int)
+        winner_serializable = None
+        if self.game_over and game_state.winner is not None:
+            if hasattr(game_state.winner, "item"):
+                winner_serializable = int(game_state.winner.item())
+            elif isinstance(game_state.winner, (int, np.integer)):
+                winner_serializable = int(game_state.winner)
+            else:
+                winner_serializable = int(game_state.winner) if game_state.winner is not None else None
+        
+        # Serialize extended action history
+        extended_history_serializable = [
+            {
+                "player_id": entry["player_id"],
+                "action_type": entry["action_type"],
+                "action_data": entry["action_data"],
+                "consequences": entry["consequences"],
+                "turn_number": entry["turn_number"],
+            }
+            for entry in self.extended_action_history
+        ]
 
         return {
             "game_id": self.game_id,
-            "current_player": self.current_player,
-            "turn_number": self.turn_number,
-            "game_over": self.game_over,
-            "winner": game_state.winner if self.game_over else None,
-            "player_dice_count": game_state.player_dice_count,
-            "current_bid": game_state.current_bid,
-            "bid_history": game_state.bid_history,
-            "palifico_active": game_state.palifico_active,
-            "believe_called": game_state.believe_called,
-            "player_dice": player_dice,  # Only human player's dice
-            "public_info": public_info,
+            "current_player": int(self.current_player),
+            "turn_number": int(self.turn_number),
+            "game_over": bool(self.game_over),
+            "winner": winner_serializable,
+            "player_dice_count": self._serialize_value(game_state.player_dice_count),
+            "current_bid": current_bid_serializable,
+            "bid_history": bid_history_serializable,
+            "extended_action_history": extended_history_serializable,
+            "palifico_active": self._serialize_value(game_state.palifico_active),
+            "believe_called": bool(game_state.believe_called),
+            "player_dice": player_dice,  # Only human player's dice (converted to lists)
+            "public_info": self._serialize_public_info(public_info),
         }
+    
+    def _serialize_public_info(self, public_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Serialize public_info dictionary to be JSON-compatible.
+        
+        Args:
+            public_info: Public info dictionary from game_state
+            
+        Returns:
+            JSON-serializable dictionary
+        """
+        serialized = {}
+        for key, value in public_info.items():
+            serialized[key] = self._serialize_value(value)
+        return serialized
+    
+    def _serialize_value(self, value: Any) -> Any:
+        """
+        Recursively serialize a value to be JSON-compatible.
+        
+        Args:
+            value: Value to serialize
+            
+        Returns:
+            JSON-serializable value
+        """
+        # Handle None
+        if value is None:
+            return None
+        
+        # Handle numpy arrays
+        if isinstance(value, np.ndarray) or hasattr(value, "tolist"):
+            return value.tolist()
+        
+        # Handle numpy scalars (int, float, bool)
+        if isinstance(value, (np.integer, np.floating, np.bool_)):
+            return value.item()
+        
+        # Handle numpy scalar types that have item() method
+        if hasattr(value, "item") and not isinstance(value, (list, dict, tuple, str)):
+            try:
+                return value.item()
+            except (ValueError, AttributeError):
+                pass
+        
+        # Handle tuples - convert to lists
+        if isinstance(value, tuple):
+            return [self._serialize_value(item) for item in value]
+        
+        # Handle lists - recursively serialize items
+        if isinstance(value, list):
+            return [self._serialize_value(item) for item in value]
+        
+        # Handle dictionaries - recursively serialize values
+        if isinstance(value, dict):
+            return {k: self._serialize_value(v) for k, v in value.items()}
+        
+        # Handle basic types - these are already JSON-serializable
+        if isinstance(value, (bool, int, float, str)):
+            return value
+        
+        # For any other type, try to convert to string as fallback
+        # This should not happen in normal cases, but provides a safe fallback
+        return str(value)
 
     def make_human_action(self, action: int) -> Dict[str, Any]:
         """
@@ -248,6 +381,18 @@ class GameSession:
             "value": param2 if action_type == "bid" else None,
         }
 
+        # Extract consequences from info
+        consequences = self._extract_consequences(info, 0, action_type)
+
+        # Add to extended action history
+        self.extended_action_history.append({
+            "player_id": 0,
+            "action_type": action_type,
+            "action_data": action_data,
+            "consequences": consequences,
+            "turn_number": self.turn_number,
+        })
+
         # Save action to DB
         add_action(
             SessionLocal(),
@@ -265,12 +410,20 @@ class GameSession:
         # Save state to DB
         self._save_state_to_db()
 
+        # Serialize reward (may be numpy scalar)
+        if hasattr(reward, "item"):
+            reward_serializable = float(reward.item())
+        elif isinstance(reward, (int, float)):
+            reward_serializable = float(reward)
+        else:
+            reward_serializable = 0.0
+        
         result = {
             "success": True,
             "action": action_data,
-            "reward": reward,
+            "reward": reward_serializable,
             "game_over": self.game_over,
-            "winner": self.env.game_state.winner if self.game_over else None,
+            "winner": int(self.env.game_state.winner) if self.game_over and self.env.game_state.winner is not None else None,
         }
 
         # If game is over, finish it in DB
@@ -314,6 +467,18 @@ class GameSession:
                 "value": param2 if action_type == "bid" else None,
             }
 
+            # Extract consequences from info
+            consequences = self._extract_consequences(info, ai_player_id, action_type)
+
+            # Add to extended action history
+            self.extended_action_history.append({
+                "player_id": ai_player_id,
+                "action_type": action_type,
+                "action_data": action_data,
+                "consequences": consequences,
+                "turn_number": self.turn_number,
+            })
+
             # Save action to DB
             add_action(
                 SessionLocal(),
@@ -324,10 +489,18 @@ class GameSession:
                 self.turn_number,
             )
 
+            # Serialize reward (may be numpy scalar)
+            if hasattr(reward, "item"):
+                reward_serializable = float(reward.item())
+            elif isinstance(reward, (int, float)):
+                reward_serializable = float(reward)
+            else:
+                reward_serializable = 0.0
+            
             actions_taken.append({
                 "player_id": ai_player_id,
                 "action": action_data,
-                "reward": reward,
+                "reward": reward_serializable,
             })
 
             self.turn_number += 1
@@ -342,6 +515,162 @@ class GameSession:
                 finish_game(SessionLocal(), self.db_game_id, self.env.game_state.winner)
 
         return actions_taken
+
+    def _extract_consequences(self, info: Dict[str, Any], player_id: int, action_type: str) -> Dict[str, Any]:
+        """
+        Extract consequences of an action from info dictionary.
+        
+        Args:
+            info: Info dictionary from env.step()
+            player_id: ID of player who made the action
+            action_type: Type of action ('bid', 'challenge', 'believe')
+            
+        Returns:
+            Dictionary with consequences information
+        """
+        # Get action info from info dictionary (may be in action_info key or directly in info)
+        action_info = info.get("action_info", {})
+        if not action_info:
+            # Fallback to direct fields in info if action_info is not available
+            action_info = info
+        
+        consequences = {
+            "action_valid": action_info.get("action_valid", False),
+            "dice_lost": None,
+            "loser_id": None,
+            "challenge_success": None,
+            "believe_success": None,
+            "actual_count": None,
+            "bid_quantity": None,
+            "bid_value": None,
+            "bidder_id": None,
+            "error_msg": action_info.get("error_msg"),
+        }
+        
+        game_state = self.env.game_state
+        
+        # Extract action-specific consequences
+        if action_type == "challenge":
+            challenge_success = action_info.get("challenge_success")
+            dice_lost = action_info.get("dice_lost", 0)
+            
+            if challenge_success is not None:
+                consequences["challenge_success"] = bool(challenge_success)
+                consequences["dice_lost"] = int(dice_lost) if dice_lost is not None else 0
+                
+                # Get the challenged bid information
+                # After challenge, current_bid becomes None, but bid_history still has the last bid
+                bidder_id = None
+                bid_quantity = None
+                bid_value = None
+                
+                # First, try to get from bid_history (most reliable, as it's updated before challenge)
+                if game_state.bid_history:
+                    last_bid = game_state.bid_history[-1]
+                    if len(last_bid) >= 3:
+                        bidder_id = int(last_bid[0])
+                        bid_quantity = int(last_bid[1])
+                        bid_value = int(last_bid[2])
+                
+                # If not found, try extended history as fallback
+                if bidder_id is None:
+                    for entry in reversed(self.extended_action_history):
+                        if entry["action_type"] == "bid" and entry["action_data"].get("quantity") is not None:
+                            bidder_id = entry["player_id"]
+                            bid_quantity = entry["action_data"]["quantity"]
+                            bid_value = entry["action_data"]["value"]
+                            break
+                
+                consequences["bidder_id"] = bidder_id
+                consequences["bid_quantity"] = bid_quantity
+                consequences["bid_value"] = bid_value
+                
+                # Determine loser: if challenge succeeded (bid was wrong), bidder loses
+                # If challenge failed (bid was correct), challenger loses
+                # Use loser_id from action_info if available, otherwise determine from challenge_success
+                if action_info.get("loser_id") is not None:
+                    consequences["loser_id"] = int(action_info["loser_id"])
+                elif challenge_success:
+                    consequences["loser_id"] = bidder_id
+                else:
+                    consequences["loser_id"] = player_id
+                
+                # Get actual count from action_info if available
+                if action_info.get("actual_count") is not None:
+                    consequences["actual_count"] = int(action_info["actual_count"])
+        
+        elif action_type == "believe":
+            believe_success = action_info.get("believe_success")
+            dice_lost = action_info.get("dice_lost", 0)
+            
+            if believe_success is not None:
+                consequences["believe_success"] = bool(believe_success)
+                consequences["dice_lost"] = int(dice_lost) if dice_lost is not None else 0
+                
+                # In believe:
+                # - If success: caller gains die (or starts next round), no one loses
+                # - If failure: caller loses die
+                # Use loser_id from action_info if available
+                if action_info.get("loser_id") is not None:
+                    consequences["loser_id"] = int(action_info["loser_id"])
+                elif not believe_success:
+                    consequences["loser_id"] = int(player_id)
+                    consequences["dice_lost"] = 1
+                else:
+                    # Success - caller benefits, no one loses
+                    consequences["loser_id"] = None
+                    consequences["dice_lost"] = 0
+                
+                # Get the believed bid information
+                bidder_id = None
+                bid_quantity = None
+                bid_value = None
+                
+                # After believe, current_bid may still be available or in bid_history
+                if game_state.current_bid is not None:
+                    bid_quantity = int(game_state.current_bid[0])
+                    bid_value = int(game_state.current_bid[1])
+                    # Try to find who made this bid from bid_history
+                    if game_state.bid_history:
+                        last_bid = game_state.bid_history[-1]
+                        if len(last_bid) >= 3 and last_bid[1] == bid_quantity and last_bid[2] == bid_value:
+                            bidder_id = int(last_bid[0])
+                elif game_state.bid_history:
+                    # If current_bid is None, get from bid_history
+                    last_bid = game_state.bid_history[-1]
+                    if len(last_bid) >= 3:
+                        bidder_id = int(last_bid[0])
+                        bid_quantity = int(last_bid[1])
+                        bid_value = int(last_bid[2])
+                
+                # Fallback to extended history
+                if bidder_id is None and bid_quantity is None:
+                    for entry in reversed(self.extended_action_history):
+                        if entry["action_type"] == "bid" and entry["action_data"].get("quantity") is not None:
+                            bidder_id = entry["player_id"]
+                            bid_quantity = entry["action_data"]["quantity"]
+                            bid_value = entry["action_data"]["value"]
+                            break
+                
+                consequences["bidder_id"] = bidder_id
+                consequences["bid_quantity"] = bid_quantity
+                consequences["bid_value"] = bid_value
+                # Get actual count from action_info if available
+                if action_info.get("actual_count") is not None:
+                    consequences["actual_count"] = int(action_info["actual_count"])
+        
+        elif action_type == "bid":
+            # For bid, consequences are usually none unless challenged later
+            # A bid itself doesn't cause immediate consequences
+            consequences["dice_lost"] = 0
+            consequences["loser_id"] = None
+        
+        # Get current dice counts for reference
+        consequences["player_dice_count_after"] = [
+            int(count) for count in game_state.player_dice_count
+        ]
+        
+        return consequences
 
     def _save_state_to_db(self):
         """Save current game state to database."""
@@ -467,34 +796,78 @@ class GameServer:
 
         # Get models from opponent pool
         if self.opponent_pool:
-            pool_snapshots = self.opponent_pool.list_snapshots()
-            for snapshot_id, snapshot_info in pool_snapshots.items():
-                models.append({
-                    "id": snapshot_id,
-                    "path": snapshot_info["path"],
-                    "step": snapshot_info["step"],
-                    "elo": snapshot_info.get("elo", 1500.0),
-                    "winrate": snapshot_info.get("winrate", 0.5),
-                    "source": "opponent_pool",
-                })
+            try:
+                pool_snapshots = self.opponent_pool.list_snapshots()
+                for snapshot_id, snapshot_info in pool_snapshots.items():
+                    try:
+                        # Verify that the snapshot path exists
+                        if os.path.exists(snapshot_info.get("path", "")):
+                            models.append({
+                                "id": snapshot_id,
+                                "path": snapshot_info["path"],
+                                "step": snapshot_info.get("step"),
+                                "elo": snapshot_info.get("elo", 1500.0),
+                                "winrate": snapshot_info.get("winrate", 0.5),
+                                "source": "opponent_pool",
+                            })
+                    except Exception as e:
+                        # Skip individual snapshot if there's an error
+                        if web_config.debug:
+                            print(f"Warning: Skipping snapshot {snapshot_id}: {e}")
+                        continue
+            except Exception as e:
+                # Log error but continue to try loading from main directory
+                error_msg = f"Error loading opponent pool snapshots: {e}"
+                print(f"ERROR: {error_msg}")
+                if web_config.debug:
+                    traceback.print_exc()
 
         # Get models from main model directory
-        import os
         import glob
-        if os.path.exists(web_config.model_dir):
-            pattern = os.path.join(web_config.model_dir, "*.zip")
-            for model_path in glob.glob(pattern):
-                model_name = os.path.basename(model_path)
-                # Skip opponent pool models (already added)
-                if "opponent_pool" not in model_path:
-                    models.append({
-                        "id": model_name,
-                        "path": model_path,
-                        "step": None,
-                        "elo": None,
-                        "winrate": None,
-                        "source": "main_dir",
-                    })
+        try:
+            if os.path.exists(web_config.model_dir):
+                pattern = os.path.join(web_config.model_dir, "*.zip")
+                try:
+                    for model_path in glob.glob(pattern):
+                        try:
+                            model_name = os.path.basename(model_path)
+                            # Skip opponent pool models (already added)
+                            if "opponent_pool" not in model_path:
+                                # Verify file exists and is readable
+                                if os.path.isfile(model_path):
+                                    # Try to extract step from filename
+                                    # Pattern: perudo_model_100000_steps.zip -> step=100000
+                                    step = None
+                                    step_match = re.search(r'_(\d+)_steps\.zip$', model_name)
+                                    if step_match:
+                                        try:
+                                            step = int(step_match.group(1))
+                                        except ValueError:
+                                            pass
+                                    
+                                    models.append({
+                                        "id": model_name,
+                                        "path": model_path,
+                                        "step": step,
+                                        "elo": None,
+                                        "winrate": None,
+                                        "source": "main_dir",
+                                    })
+                        except Exception as e:
+                            # Skip individual model if there's an error
+                            if web_config.debug:
+                                print(f"Warning: Skipping model {model_path}: {e}")
+                            continue
+                except Exception as e:
+                    error_msg = f"Error scanning model directory {web_config.model_dir}: {e}"
+                    print(f"ERROR: {error_msg}")
+                    if web_config.debug:
+                        traceback.print_exc()
+        except Exception as e:
+            error_msg = f"Error accessing model directory {web_config.model_dir}: {e}"
+            print(f"ERROR: {error_msg}")
+            if web_config.debug:
+                traceback.print_exc()
 
         return models
 

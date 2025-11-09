@@ -69,12 +69,6 @@ class PerudoRules:
                 if value != prev_value:
                     return False, "Palifico player cannot change value"
 
-        # Check maximum quantity (cannot exceed total dice count)
-        total_dice = sum(game_state.player_dice_count)
-        max_possible = total_dice  # Considering pasari
-        if quantity > max_possible:
-            return False, f"Quantity cannot exceed {max_possible}"
-
         return True, ""
 
     @staticmethod
@@ -254,16 +248,20 @@ class PerudoRules:
                     actions.append(("bid", 1, v))
             else:
                 # First bid - can be any except value 1
+                # No upper limit on quantity - can bid any amount above minimum
                 min_quantity = 1
-                max_quantity = sum(game_state.player_dice_count)  # Considering pasari
-                for q in range(min_quantity, min(max_quantity + 1, 30)):  # Limit to reasonable maximum
+                max_reasonable = 100  # Reasonable upper limit for action space, but no game logic limit
+                for q in range(min_quantity, max_reasonable + 1):
                     for v in range(2, game_state.total_dice_values + 1):  # Skip value 1 for first bid
                         actions.append(("bid", q, v))
         else:
             # Subsequent bids must be higher
+            # No upper limit on quantity - can bid any amount above minimum required
             prev_quantity, prev_value = game_state.current_bid
-            max_quantity = sum(game_state.player_dice_count)
-            for q in range(prev_quantity, min(max_quantity + 1, 30)):
+            # Start from minimum possible quantity (1) and let _is_bid_higher filter valid bids
+            # This allows any quantity that satisfies the "higher bid" rule
+            max_reasonable = 100  # Reasonable upper limit for action space, but no game logic limit
+            for q in range(1, max_reasonable + 1):
                 for v in range(1, game_state.total_dice_values + 1):
                     # In special round, value cannot change
                     if game_state.special_round_active and v != prev_value:

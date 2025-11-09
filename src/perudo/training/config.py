@@ -3,7 +3,7 @@ Configuration for training Perudo agents.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 
 
 @dataclass
@@ -25,44 +25,48 @@ class RewardConfig:
     """
     Reward and penalty configuration for training.
     
-    Conservative reward scaling (approximately 1/20 of original values) to keep
-    episode rewards in a stable range (-20 to +20) for better PPO training stability.
-    This prevents reward variance from -500 to +500 that can destabilize learning.
+    Using sparse reward approach: primarily reward for winning, minimal intermediate rewards.
+    This prevents reward hacking and allows agent to focus on the primary objective.
+    Intermediate rewards are set to 0.0 but kept in structure for easy re-enabling if needed.
     """
 
     # Game outcome rewards
-    win_reward: float = 5.0  # Reward for winning the game (was 50.0)
+    win_reward: float = 2  # Reward for winning the game (sparse reward - main objective)
+    win_dice_bonus: float = 0.1 # Bonus per remaining die when winning the game
+    lose_penalty: float = 0  # Penalty for losing the game (negative reward to distinguish from win)
 
     # Dice loss penalties
-    dice_lost_penalty: float = -0.5  # Penalty per die lost (was -2.0)
+    dice_lost_penalty: float = -0.5 # Minimal penalty per die lost (for training stability)
 
-    # Challenge rewards and penalties
-    challenge_success_reward: float = 0.1  # Reward for successful challenge (caught bluff) (was 2.0)
-    challenge_failure_penalty: float = -0.1  # Penalty for unsuccessful challenge that led to dice loss (was -2.0)
+    # Challenge rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
+    challenge_success_reward: float = 0.1  # Reward for successful challenge (caught bluff) - DISABLED
+    challenge_failure_penalty: float = -0.05  # Penalty for unsuccessful challenge that led to dice loss - DISABLED
 
-    # Believe rewards and penalties
-    believe_success_reward: float = 0.1  # Reward for successful believe call (caught bluff) (was 2.0)
-    believe_failure_penalty: float = -0.1  # Penalty for unsuccessful believe call that led to dice loss (was -2.0)
+    # Believe rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
+    believe_success_reward: float = 0.1  # Reward for successful believe call (caught bluff) - DISABLED
+    believe_failure_penalty: float = -0.05  # Penalty for unsuccessful believe call that led to dice loss - DISABLED
 
-    # Bid-related rewards and penalties
-    bid_small_penalty: float = 0  # Small negative reward for bidding to encourage finishing the round
-    unsuccessful_bid_penalty: float = -0.1  # Penalty for unsuccessful bid that led to dice loss (was -1.5)
+    # Bid-related rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
+    bid_small_penalty: float = -0.01  # Small negative reward for bidding to encourage finishing the round - DISABLED
+    unsuccessful_bid_penalty: float = -0.1  # Penalty for unsuccessful bid that led to dice loss - DISABLED
 
-    # Round-end rewards (WARNING: these accumulate over many rounds!)
-    round_no_dice_lost_reward: float = 0.05  # Reward for each round in which the agent did not lose a die (was 1.0)
-    successful_bluff_reward: float = 0.25  # Reward for successful bluff (bid was correct or never challenged) (was 5.0)
 
-    # Bid defense rewards (when opponent challenges/believes agent's bid and fails)
-    defend_bid_reward_challenge: float = 0.1  # Reward for successfully defending bid against challenge (was 2.5)
-    defend_bid_reward_believe: float = 0.25  # Reward for successfully defending bid against believe (was 5.0)
+    round_no_dice_lost_reward: float = 0.0  # Reward for each round in which the agent did not lose a die - DISABLED
+    successful_bluff_reward: float = 0.0  # Reward for successful bluff (bid was correct or never challenged) - DISABLED
 
-    # Dice advantage rewards (WARNING: these are given every step and accumulate!)
-    dice_advantage_reward: float = 0.03  # Reward per die advantage over average opponents (was 0.5)
-    dice_advantage_max: float = 5.0  # Maximum dice advantage to consider (cap)
-    leader_bonus: float = 0.1  # Bonus reward for being the leader (having more dice than all opponents) (was 2.0)
+    # Bid defense rewards (DISABLED - set to 0.0 for sparse rewards)
+    # When opponent challenges/believes agent's bid and fails
+    defend_bid_reward_challenge: float = 0.01  # Reward for successfully defending bid against challenge - DISABLED
+    defend_bid_reward_believe: float = 0.01  # Reward for successfully defending bid against believe - DISABLED
 
-    # Invalid action penalty
-    invalid_action_penalty: float = -0.05  # Penalty for invalid action (action not allowed by rules) (was -1.0)
+    # Dice advantage rewards (DISABLED - set to 0.0 for sparse rewards)
+    # WARNING: these are given every step and accumulate, can cause reward hacking
+    dice_advantage_reward: float = 0.0  # Reward per die advantage over average opponents - DISABLED
+    dice_advantage_max: float = 0.0  # Maximum dice advantage to consider (cap) - kept for structure
+    leader_bonus: float = 0.0  # Bonus reward for being the leader (having more dice than all opponents) - DISABLED
+
+    # Invalid action penalty (kept minimal to guide learning, but not too harsh)
+    invalid_action_penalty: float = -0.01  # Minimal penalty for invalid action (helps avoid invalid actions)
 
 
 @dataclass
@@ -75,25 +79,14 @@ class TrainingConfig:
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     opponent_device: Optional[str] = "cpu"  
     learning_rate: float = 3.0e-4  
-    # Batch collection parameters - optimized for stable learning with 16 parallel environments
-    # n_steps: Number of steps to collect before updating policy
-    #   With 16 envs, n_steps=8192 means ~512 steps per environment = ~0.5-1 complete episodes
-    #   This allows collecting enough diverse data from multiple episodes before updating
-    n_steps: int = 8192  # Increased from 2048 to collect more data before updates
-    # batch_size: Mini-batch size for gradient updates
-    #   Should be a divisor of (n_steps * num_envs) for efficient training
-    #   With n_steps=8192 and num_envs=16, effective buffer = 131,072 samples
-    #   batch_size=256 gives 512 batches per cycle, good balance between stability and efficiency
-    batch_size: int = 256  # Optimal for n_steps=8192, gives good gradient update frequency
-    # n_epochs: Number of times to iterate over the collected data
-    #   Reduced from 10 to 4-6 to prevent overfitting on small batches
-    #   With more data (n_steps=8192), fewer epochs are needed per update
-    n_epochs: int = 4  # Reduced from 10 to prevent overfitting on collected batch
-    gamma: float = 0.95
+    n_steps: int = 8192
+    batch_size: int = 512
+    n_epochs: int = 6
+    gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_range: float = 0.2
-    ent_coef: float = 0.03 
-    vf_coef: float = 0.75  
+    ent_coef: float = 0.06
+    vf_coef: float = 1.0
     max_grad_norm: float = 0.3  
     
     # Transformer parameters (optimized for sequence length 20)
@@ -106,7 +99,7 @@ class TrainingConfig:
     transformer_dropout: float = 0.1  # Explicit dropout parameter
 
     # Training parameters
-    num_envs: int = 16  # Number of parallel environments (tables)
+    num_envs: int = 1  # Number of parallel environments (tables)
     total_timesteps: int = 10_000_000
     save_freq: int = 100_000  # Save model every N steps
     eval_freq: int = 50_000  # Evaluate model every N steps
@@ -120,7 +113,7 @@ class TrainingConfig:
     # Other
     verbose: int = 1
     seed: Optional[int] = None
-    debug_moves: bool = False  # Enable detailed move logging (forces num_envs=1)
+    debug_moves: bool = True  # Enable detailed move logging (forces num_envs=1)
 
 
 @dataclass

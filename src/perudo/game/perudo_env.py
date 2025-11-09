@@ -37,6 +37,7 @@ class PerudoEnv(gym.Env):
         min_players: int = 3,
         max_players: int = 8,
         reward_config: Optional[RewardConfig] = None,
+        debug_moves: bool = False,
     ):
         """
         Initialize Perudo environment.
@@ -53,6 +54,7 @@ class PerudoEnv(gym.Env):
             min_players: Minimum number of players (used when random_num_players=True)
             max_players: Maximum number of players (used when random_num_players=True)
             reward_config: Reward configuration (uses DEFAULT_CONFIG.reward if not provided)
+            debug_moves: Enable detailed move logging for debugging
         """
         super().__init__()
 
@@ -221,22 +223,34 @@ class PerudoEnv(gym.Env):
             observation = self._get_observation(self.active_player_id)
             
             winner = self.game_state.winner if hasattr(self.game_state, "winner") and self.game_state.winner is not None else -1
+            # CRITICAL: When used in VecEnv, episode info should be set by VecEnv wrapper, not here
+            # This prevents incorrect rewards from being recorded when game ends on opponent's turn
+            # VecEnv wrapper (perudo_vec_env.py) will recalculate and set correct reward for learning agent
             info = {
                 "game_over": True,
                 "winner": self.game_state.winner,
-                "episode": {
-                    "r": self.episode_reward,
-                    "l": self.episode_length,
-                    "bid_count": self.episode_bid_count,
-                    "challenge_count": self.episode_challenge_count,
-                    "believe_count": self.episode_believe_count,
-                    "invalid_action_count": self.episode_invalid_action_count,
-                    "winner": winner,
-                },
-                "episode_reward": self.episode_reward,
-                "episode_length": self.episode_length,
+                # Do NOT set episode info here - let VecEnv wrapper set it with correct learning agent reward
+                # VecEnv wrapper will recalculate reward based on final game state
+                # Episode info is only set here if env is used standalone (not in VecEnv)
+                "_episode_bid_count": self.episode_bid_count,
+                "_episode_challenge_count": self.episode_challenge_count,
+                "_episode_believe_count": self.episode_believe_count,
+                "_episode_invalid_action_count": self.episode_invalid_action_count,
+                "_episode_reward_raw": self.episode_reward,  # Raw reward for debugging
+                "_episode_length_raw": self.episode_length,  # Raw length for debugging
             }
             return observation, 0.0, True, False, info
+
+        # CRITICAL: Check that active player has dice - players with 0 dice cannot make moves
+        # Players without dice have already lost and should be automatically skipped
+        if self.game_state.player_dice_count[self.active_player_id] == 0:
+            # Player has no dice, skip to next player with dice
+            # Use next_player() which automatically skips players with 0 dice
+            self.game_state.next_player()
+            # Update active_player_id to match current_player (which now points to next player with dice)
+            self.active_player_id = self.game_state.current_player
+            observation = self._get_observation(self.active_player_id)
+            return observation, 0.0, False, False, {"error": "Player has no dice"}
 
         # Convert action to game format
         action_type, param1, param2 = action_to_bid(action, self.max_quantity)
@@ -282,6 +296,8 @@ class PerudoEnv(gym.Env):
         action_valid = False
         retry_needed = False  # Flag to indicate if action needs to be retried
         error_msg = None  # Reason for rejection if action is invalid
+        actual_count_info = None  # Initialize for info dict (actual dice count for challenge/believe)
+        loser_id_info = None  # Initialize for info dict (player who lost dice, if any)
 
         if action_type == "bid":
             # Make a bid
@@ -317,13 +333,20 @@ class PerudoEnv(gym.Env):
                 
                 # Check if game ended after passing turn
                 if self.game_state.game_over:
+                    winner = self.game_state.winner
+                    winner_dice_count = None
+                    if winner is not None and winner >= 0 and winner == self.active_player_id:
+                        # Only pass dice count if the active player won
+                        if winner < len(self.game_state.player_dice_count):
+                            winner_dice_count = self.game_state.player_dice_count[winner]
                     reward = calculate_reward(
                         "bid",
                         self.game_state.game_over,
-                        self.game_state.winner or -1,
+                        winner or -1,
                         self.active_player_id,
                         dice_lost=0,
                         reward_config=self.reward_config,
+                        winner_dice_count=winner_dice_count,
                     )
 
         elif action_type == "challenge":
@@ -342,6 +365,9 @@ class PerudoEnv(gym.Env):
                     actual_count,
                     bid_quantity,
                 )
+                # Store for info
+                actual_count_info = actual_count
+                loser_id_info = loser_id
                 
                 # Check if agent (player 0) made the bid and successfully defended it
                 # (opponent challenged and failed)
@@ -359,29 +385,49 @@ class PerudoEnv(gym.Env):
                 # Pass action_type to avoid double penalty (challenge already penalized in calculate_reward)
                 round_reward = self._check_round_end_reward(loser_id, dice_lost, action_type="challenge")
                 self.game_state.lose_dice(loser_id, dice_lost)
-                self.game_state.current_bid = None
-                self.game_state.believe_called = False
+                
+                # CRITICAL: Check if game ended after losing dice
+                # If game is over, don't start new round
+                if not self.game_state.game_over:
+                    self.game_state.current_bid = None
+                    self.game_state.believe_called = False
 
-                # Restart round: next round starts with the player who lost the die
-                self.game_state.current_player = loser_id
+                    # Restart round: next round starts with the player who lost the die
+                    # BUT: if that player now has 0 dice (eliminated), skip to next player with dice
+                    # Players with 0 dice have already lost and cannot make moves
+                    self.game_state.current_player = loser_id
+                    # CRITICAL: If loser now has 0 dice (eliminated), skip to next player with dice
+                    if self.game_state.player_dice_count[loser_id] == 0:
+                        self.game_state.next_player()
 
-                # Roll dice again - round ends
-                # Reset special round at end of round
-                self.game_state.special_round_active = False
-                self.game_state.special_round_declared_by = None
-                self.game_state.roll_dice()
-                # Reset round tracking after dice roll
-                self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
-                self.agent_bid_this_round = False
+                    # Roll dice again - round ends
+                    # Reset special round at end of round
+                    self.game_state.special_round_active = False
+                    self.game_state.special_round_declared_by = None
+                    self.game_state.roll_dice()
+                    # Reset round tracking after dice roll
+                    self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
+                    self.agent_bid_this_round = False
+                else:
+                    # Game ended, clear bid state
+                    self.game_state.current_bid = None
+                    self.game_state.believe_called = False
 
+                winner = self.game_state.winner
+                winner_dice_count = None
+                if self.game_state.game_over and winner is not None and winner >= 0 and winner == self.active_player_id:
+                    # Only pass dice count if the active player won
+                    if winner < len(self.game_state.player_dice_count):
+                        winner_dice_count = self.game_state.player_dice_count[winner]
                 reward = calculate_reward(
                     "challenge",
                     self.game_state.game_over,
-                    self.game_state.winner or -1,
+                    winner or -1,
                     self.active_player_id,
                     challenge_success=challenge_success,
                     dice_lost=dice_lost if loser_id == self.active_player_id else 0,
                     reward_config=self.reward_config,
+                    winner_dice_count=winner_dice_count,
                 )
                 # Count challenge action (for all players, not just learning agent)
                 self.episode_challenge_count += 1
@@ -407,14 +453,21 @@ class PerudoEnv(gym.Env):
                 
                 # Check if game ended after passing turn
                 if self.game_state.game_over:
+                    winner = self.game_state.winner
+                    winner_dice_count = None
+                    if winner is not None and winner >= 0 and winner == self.active_player_id:
+                        # Only pass dice count if the active player won
+                        if winner < len(self.game_state.player_dice_count):
+                            winner_dice_count = self.game_state.player_dice_count[winner]
                     reward = calculate_reward(
                         "challenge",
                         self.game_state.game_over,
-                        self.game_state.winner or -1,
+                        winner or -1,
                         self.active_player_id,
                         challenge_success=False,
                         dice_lost=0,
                         reward_config=self.reward_config,
+                        winner_dice_count=winner_dice_count,
                     )
 
         elif action_type == "believe":
@@ -434,6 +487,9 @@ class PerudoEnv(gym.Env):
                     actual_count,
                     bid_quantity,
                 )
+                # Store for info
+                actual_count_info = actual_count
+                loser_id_info = loser_id
                 
                 # Handle believe result according to new rules
                 player_who_changed_dice = None  # Track who gained or lost a die
@@ -471,39 +527,65 @@ class PerudoEnv(gym.Env):
                 round_reward = self._check_round_end_reward(loser_id if loser_id is not None else -1, dice_lost, action_type="believe")
                 if loser_id is not None:
                     self.game_state.lose_dice(loser_id, dice_lost)
-                self.game_state.current_bid = None
-                self.game_state.believe_called = False
+                
+                # CRITICAL: Check if game ended after losing dice
+                # If game is over, don't start new round
+                if not self.game_state.game_over:
+                    self.game_state.current_bid = None
+                    self.game_state.believe_called = False
 
-                # Restart round: next round starts with the player who gained or lost a die
-                if player_who_changed_dice is not None:
-                    self.game_state.current_player = player_who_changed_dice
-                elif next_round_starter is not None:
-                    # Believer with 5 dice starts next round
-                    self.game_state.current_player = next_round_starter
-                elif loser_id is not None:
-                    # Fallback: if no one gained dice but someone lost, that player starts
-                    self.game_state.current_player = loser_id
+                    # Restart round: next round starts with the player who gained or lost a die
+                    # BUT: if that player now has 0 dice (eliminated), skip to next player with dice
+                    # Players with 0 dice have already lost and cannot make moves
+                    if player_who_changed_dice is not None:
+                        self.game_state.current_player = player_who_changed_dice
+                        # CRITICAL: If player now has 0 dice (eliminated), skip to next player with dice
+                        if self.game_state.player_dice_count[player_who_changed_dice] == 0:
+                            self.game_state.next_player()
+                    elif next_round_starter is not None:
+                        # Believer with 5 dice starts next round
+                        self.game_state.current_player = next_round_starter
+                        # CRITICAL: If player now has 0 dice (eliminated), skip to next player with dice
+                        if self.game_state.player_dice_count[next_round_starter] == 0:
+                            self.game_state.next_player()
+                    elif loser_id is not None:
+                        # Fallback: if no one gained dice but someone lost, that player starts
+                        self.game_state.current_player = loser_id
+                        # CRITICAL: If loser now has 0 dice (eliminated), skip to next player with dice
+                        if self.game_state.player_dice_count[loser_id] == 0:
+                            self.game_state.next_player()
+                    else:
+                        # Fallback: continue normally (next_player() will skip players with 0 dice)
+                        self.game_state.next_player()
+
+                    # Roll dice again - round ends
+                    # Reset special round at end of round
+                    self.game_state.special_round_active = False
+                    self.game_state.special_round_declared_by = None
+                    self.game_state.roll_dice()
+                    # Reset round tracking after dice roll
+                    self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
+                    self.agent_bid_this_round = False
                 else:
-                    # Fallback: continue normally
-                    self.game_state.next_player()
+                    # Game ended, clear bid state
+                    self.game_state.current_bid = None
+                    self.game_state.believe_called = False
 
-                # Roll dice again - round ends
-                # Reset special round at end of round
-                self.game_state.special_round_active = False
-                self.game_state.special_round_declared_by = None
-                self.game_state.roll_dice()
-                # Reset round tracking after dice roll
-                self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
-                self.agent_bid_this_round = False
-
+                winner = self.game_state.winner
+                winner_dice_count = None
+                if self.game_state.game_over and winner is not None and winner >= 0 and winner == self.active_player_id:
+                    # Only pass dice count if the active player won
+                    if winner < len(self.game_state.player_dice_count):
+                        winner_dice_count = self.game_state.player_dice_count[winner]
                 reward = calculate_reward(
                     "believe",
                     self.game_state.game_over,
-                    self.game_state.winner or -1,
+                    winner or -1,
                     self.active_player_id,
                     believe_success=believe_success,
                     dice_lost=dice_lost if (loser_id is not None and loser_id == self.active_player_id) else 0,
                     reward_config=self.reward_config,
+                    winner_dice_count=winner_dice_count,
                 )
                 # Count believe action (for all players, not just learning agent)
                 self.episode_believe_count += 1
@@ -529,14 +611,21 @@ class PerudoEnv(gym.Env):
                 
                 # Check if game ended after passing turn
                 if self.game_state.game_over:
+                    winner = self.game_state.winner
+                    winner_dice_count = None
+                    if winner is not None and winner >= 0 and winner == self.active_player_id:
+                        # Only pass dice count if the active player won
+                        if winner < len(self.game_state.player_dice_count):
+                            winner_dice_count = self.game_state.player_dice_count[winner]
                     reward = calculate_reward(
                         "believe",
                         self.game_state.game_over,
-                        self.game_state.winner or -1,
+                        winner or -1,
                         self.active_player_id,
                         believe_success=False,
                         dice_lost=0,
                         reward_config=self.reward_config,
+                        winner_dice_count=winner_dice_count,
                     )
 
         # Save action information
@@ -548,39 +637,9 @@ class PerudoEnv(gym.Env):
             "challenge_success": challenge_success,
             "believe_success": believe_success,
             "error_msg": error_msg,  # Reason for rejection if action is invalid
+            "actual_count": actual_count_info,  # Actual dice count for challenge/believe
+            "loser_id": loser_id_info,  # Player who lost dice (if any)
         }
-        
-        # Print step information for training room
-        # Format action description
-        # action_desc = ""
-        # if action_type == "bid":
-        #     action_desc = f"ставка {param1}x{param2}"
-        # elif action_type == "challenge":
-        #     action_desc = "вызов (challenge)"
-        # elif action_type == "believe":
-        #     action_desc = "верить (believe)"
-        
-        # Print step information
-        # status = "ПРИНЯТ" if action_valid else "ОТКЛОНЕН"
-        # print(f"[Шаг] Игрок {self.active_player_id}: {action_desc} - {status}", end="")
-        
-        # if not action_valid:
-        #     attempt_info = f", попытка #{self.invalid_action_attempts}" if self.invalid_action_attempts > 0 else ""
-        #     if error_msg:
-        #         print(f" (причина: {error_msg}{attempt_info})")
-        #     else:
-        #         print(f" (попытка #{self.invalid_action_attempts})" if self.invalid_action_attempts > 0 else "")
-        # else:
-        #     print()
-        
-        # Additional info for valid actions
-        #if action_valid:
-        #    if action_type == "challenge" and challenge_success is not None:
-        #        challenge_result = "успешен" if challenge_success else "неудачен"
-        #        print(f"  -> Вызов {challenge_result}, потеряно костей: {dice_lost}")
-        #    elif action_type == "believe" and believe_success is not None:
-        #        believe_result = "успешен" if believe_success else "неудачен"
-        #        print(f"  -> Believe {believe_result}, потеряно костей: {dice_lost}")
 
         # Get new observation
         observation = self._get_observation(self.active_player_id)
@@ -633,23 +692,37 @@ class PerudoEnv(gym.Env):
         }
 
         # если эпизод завершился, сохраняем статистику для realtime
+        # CRITICAL: When used in VecEnv, episode info should be set by VecEnv wrapper, not here
+        # This prevents incorrect rewards from being recorded when game ends on opponent's turn
+        # VecEnv wrapper (perudo_vec_env.py) will recalculate and set correct reward for learning agent
         if done:
-            # VecMonitor expects "episode" key with "r" (reward) and "l" (length) subkeys
-            # Additional statistics: bid_count, challenge_count, believe_count, winner
-            info["episode"] = {
-                "r": self.episode_reward,
-                "l": self.episode_length,
-                "bid_count": self.episode_bid_count,
-                "challenge_count": self.episode_challenge_count,
-                "believe_count": self.episode_believe_count,
-                "invalid_action_count": self.episode_invalid_action_count,
-                "winner": self.game_state.winner if hasattr(self.game_state, "winner") and self.game_state.winner is not None else -1,
-            }
-            # Also keep old format for backward compatibility with custom callbacks
-            info["episode_reward"] = self.episode_reward
-            info["episode_length"] = self.episode_length
+            # Only set episode info if it's not already set by VecEnv wrapper
+            # VecEnv wrapper sets episode info with correct learning agent reward
+            if "episode" not in info:
+                # VecMonitor expects "episode" key with "r" (reward) and "l" (length) subkeys
+                # Additional statistics: bid_count, challenge_count, believe_count, winner
+                # NOTE: This is only used when env is used standalone (not in VecEnv)
+                # When used in VecEnv, perudo_vec_env.py will set correct episode info
+                info["episode"] = {
+                    "r": self.episode_reward,
+                    "l": self.episode_length,
+                    "bid_count": self.episode_bid_count,
+                    "challenge_count": self.episode_challenge_count,
+                    "believe_count": self.episode_believe_count,
+                    "invalid_action_count": self.episode_invalid_action_count,
+                    "winner": self.game_state.winner if hasattr(self.game_state, "winner") and self.game_state.winner is not None else -1,
+                }
+                # Also keep old format for backward compatibility with custom callbacks
+                info["episode_reward"] = self.episode_reward
+                info["episode_length"] = self.episode_length
+            # Always set winner and other game state info (VecEnv may need it)
             if hasattr(self.game_state, "winner"):
                 info["winner"] = self.game_state.winner
+            # Always set episode statistics (bid_count, etc.) for VecEnv to use
+            info["_episode_bid_count"] = self.episode_bid_count
+            info["_episode_challenge_count"] = self.episode_challenge_count
+            info["_episode_believe_count"] = self.episode_believe_count
+            info["_episode_invalid_action_count"] = self.episode_invalid_action_count
 
         return observation, reward, terminated, truncated, info
 

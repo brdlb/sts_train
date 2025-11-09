@@ -19,6 +19,32 @@ export interface ModelInfo {
   source: string;
 }
 
+export interface ActionConsequences {
+  action_valid: boolean;
+  dice_lost: number | null;
+  loser_id: number | null;
+  challenge_success: boolean | null;
+  believe_success: boolean | null;
+  actual_count: number | null;
+  bid_quantity: number | null;
+  bid_value: number | null;
+  bidder_id: number | null;
+  error_msg: string | null;
+  player_dice_count_after: number[];
+}
+
+export interface ExtendedActionHistoryEntry {
+  player_id: number;
+  action_type: string;
+  action_data: {
+    action_type: string;
+    quantity: number | null;
+    value: number | null;
+  };
+  consequences: ActionConsequences;
+  turn_number: number;
+}
+
 export interface GameState {
   game_id: string;
   current_player: number;
@@ -28,6 +54,7 @@ export interface GameState {
   player_dice_count: number[];
   current_bid: [number, number] | null;
   bid_history: Array<[number, number, number]>;
+  extended_action_history?: ExtendedActionHistoryEntry[];
   palifico_active: boolean[];
   believe_called: boolean;
   player_dice: {

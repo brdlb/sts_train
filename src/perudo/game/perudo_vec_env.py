@@ -29,6 +29,11 @@ except ImportError:
     RewardConfig = None  # type: ignore
     DEFAULT_CONFIG = None  # type: ignore
 
+try:
+    from ..utils.helpers import calculate_reward
+except ImportError:
+    calculate_reward = None  # type: ignore
+
 
 class PerudoMultiAgentVecEnv(VecEnv):
     """
@@ -53,6 +58,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
         min_players: int = 3,
         max_players: int = 8,
         reward_config: Optional[Any] = None,  # RewardConfig type
+        debug_moves: bool = False,
     ):
         """
         Initialize vectorized environment.
@@ -71,6 +77,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
             min_players: Minimum number of players (used when random_num_players=True)
             max_players: Maximum number of players (used when random_num_players=True)
             reward_config: Reward configuration (uses DEFAULT_CONFIG.reward if not provided)
+            debug_moves: Enable detailed move logging for debugging
         """
         self.num_envs = num_envs
         self.random_num_players = random_num_players
@@ -105,6 +112,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 max_players=max_players,
                 max_history_length=max_history_length,  # Use provided max_history_length
                 reward_config=reward_config,
+                debug_moves=debug_moves,
             )
             self.envs.append(env)
 
@@ -133,6 +141,11 @@ class PerudoMultiAgentVecEnv(VecEnv):
         # This is needed because episode can end on opponent's turn
         self.learning_agent_episode_reward: List[float] = [0.0] * num_envs
         self.learning_agent_episode_length: List[int] = [0] * num_envs
+        
+        # Track accumulated reward for VecMonitor
+        # VecMonitor accumulates rewards from step_reward, and we need to know what it has accumulated
+        # so we can return the correct difference when episode ends
+        self.vecmonitor_accumulated_reward: List[float] = [0.0] * num_envs
 
         # Track episode statistics for all learning agents when pool is empty
         # Format: List[Dict[agent_id, reward/length]] for each environment
@@ -191,9 +204,6 @@ class PerudoMultiAgentVecEnv(VecEnv):
                     i, current_step, actual_num_players, opponent_snapshot_ids
                 )
             
-            # Print game participants information
-            self._print_game_participants(i, actual_num_players, current_step)
-            
             self.current_players[i] = env.game_state.current_player
             self.active_agent_ids[i] = self.current_players[i]
             self.episode_info[i] = info
@@ -205,6 +215,8 @@ class PerudoMultiAgentVecEnv(VecEnv):
             self.all_agents_episode_length[i] = {}
             # Reset episode done flag
             self.episode_already_done[i] = False
+            # Reset VecMonitor accumulated reward tracker
+            self.vecmonitor_accumulated_reward[i] = 0.0
 
             # ===== НОВОЕ: ЕСЛИ ПЕРВЫЙ ХОД НЕ LEARNING AGENT, ПРОПУСКАЕМ ДО НЕГО =====
             # Skip only if not in all_learn mode (in all_learn mode, all agents are learning)
@@ -215,16 +227,18 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 while self.active_agent_ids[i] != 0 and steps < max_steps:
                     steps += 1
                     
-                    # Skip players with no dice - they can't make moves
+                    # CRITICAL: Skip players with no dice - they have already lost and cannot make moves
+                    # Use next_player() which automatically skips players with 0 dice
                     if env.game_state.player_dice_count[self.active_agent_ids[i]] == 0:
-                        # Use next_player() which automatically skips players with 0 dice
                         env.game_state.next_player()
                         self.active_agent_ids[i] = env.game_state.current_player
+                        self.current_players[i] = env.game_state.current_player
                         # Check if game ended after skipping players
                         if env.game_state.game_over:
                             # Game ended, reset again
                             obs, info = env.reset(seed=seeds[i], options=options[i])
                             self.active_agent_ids[i] = env.game_state.current_player
+                            self.current_players[i] = env.game_state.current_player
                             steps = 0  # Start over
                             continue
                         continue
@@ -243,10 +257,30 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         # Handle both dict and array observations
                         if isinstance(obs_for_opp, dict):
                             obs_for_predict = {key: np.array([value]) for key, value in obs_for_opp.items()}
+                            
+                            # Extract action mask if available and pass it to predict()
+                            action_masks = None
+                            if "action_mask" in obs_for_opp:
+                                mask = obs_for_opp["action_mask"]
+                                if isinstance(mask, np.ndarray):
+                                    mask = mask.astype(bool)
+                                    if mask.ndim > 1:
+                                        mask = mask.flatten()
+                                    action_masks = np.array([mask])
+                                elif isinstance(mask, (list, tuple)):
+                                    mask = np.array(mask, dtype=bool)
+                                    if mask.ndim > 1:
+                                        mask = mask.flatten()
+                                    action_masks = np.array([mask])
+                            
+                            # Predict with action mask if available
+                            if action_masks is not None:
+                                action, _ = opponent_model.predict(obs_for_predict, deterministic=False, action_masks=action_masks)
+                            else:
+                                action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
                         else:
                             obs_for_predict = obs_for_opp.reshape(1, -1)
-                        
-                        action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
+                            action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
                         action = int(action[0])
                         
                         env.set_active_player(self.active_agent_ids[i])
@@ -408,70 +442,6 @@ class PerudoMultiAgentVecEnv(VecEnv):
         )
         self.all_agents_learn_mode[env_idx] = all_use_current_model
 
-    def _print_game_participants(self, env_idx: int, num_players: int, current_step: int) -> None:
-        """
-        Print information about game participants at the start of each game.
-        
-        Args:
-            env_idx: Environment index
-            num_players: Number of players in this game
-            current_step: Current training step
-        """
-        # Determine if we should show env number (only if multiple envs)
-        env_prefix = f"[Env {env_idx}] " if self.num_envs > 1 else ""
-        
-        print(f"\n{env_prefix}{'='*60}")
-        print(f"{env_prefix}Start new game")
-        print(f"{env_prefix}{'='*60}")
-        print(f"{env_prefix}Players num: {num_players}")
-        print(f"{env_prefix}Players are:")
-        
-        # Learning Agent (player 0)
-        print(f"{env_prefix}  Learning Agent")
-        
-        # Opponents (players 1, 2, ...)
-        num_opponents = num_players - 1
-        for opp_idx in range(1, num_players):
-            slot_idx = opp_idx - 1  # Slot index (0-indexed)
-            
-            # Check if opponent uses a snapshot or current model
-            if slot_idx < len(self.opponent_paths[env_idx]):
-                opponent_path = self.opponent_paths[env_idx][slot_idx]
-                
-                if opponent_path is None:
-                    # Using current model (self-play)
-                    print(f"{env_prefix}  Player {opp_idx}: Curent (self-play)")
-                else:
-                    # Using snapshot - find snapshot metadata
-                    snapshot_info = None
-                    if self.opponent_pool is not None:
-                        # Find snapshot by path
-                        for snapshot_id, snapshot in self.opponent_pool.snapshots.items():
-                            if snapshot.path == opponent_path:
-                                snapshot_info = snapshot
-                                break
-                    
-                    if snapshot_info is not None:
-                        # Extract step from snapshot_id if available
-                        snapshot_id_display = snapshot_id
-                        if hasattr(snapshot_info, 'step'):
-                            snapshot_id_display = f"step_{snapshot_info.step}"
-                        
-                        winrate = snapshot_info.winrate * 100 if hasattr(snapshot_info, 'winrate') else 0.0
-                        elo = snapshot_info.elo if hasattr(snapshot_info, 'elo') else 0.0
-                        games = snapshot_info.games_played if hasattr(snapshot_info, 'games_played') else 0
-                        
-                        print(f"{env_prefix}  Player {opp_idx}: Snapshot {snapshot_id_display} "
-                              f"(winrate: {winrate:.1f}%, ELO: {elo:.0f}, games played: {games})")
-                    else:
-                        # Snapshot exists but metadata not found
-                        print(f"{env_prefix}  Player {opp_idx}: Snapshot {opponent_path}")
-            else:
-                # Slot index out of bounds, use current model
-                print(f"{env_prefix}  Player {opp_idx}: Game mode (self-play)")
-        
-        print(f"{env_prefix}{'='*60}\n")
-
     def step_async(self, actions: np.ndarray) -> None:
         """
         Step all environments asynchronously.
@@ -480,6 +450,35 @@ class PerudoMultiAgentVecEnv(VecEnv):
             actions: Array of actions for all environments
         """
         self._actions = actions
+
+    def _calculate_final_reward(self, env, learning_agent_id: int, accumulated_reward: float, reward_config: Optional[Any]) -> float:
+        """
+        Calculate final reward for learning agent at episode end.
+        
+        Args:
+            env: Environment instance
+            learning_agent_id: ID of learning agent (usually 0)
+            accumulated_reward: Accumulated reward during episode
+            reward_config: Reward configuration
+            
+        Returns:
+            Final reward including win/lose bonuses
+        """
+        if reward_config is None:
+            return accumulated_reward
+        
+        winner = env.game_state.winner if hasattr(env.game_state, "winner") and env.game_state.winner is not None else -1
+        
+        if winner == learning_agent_id:
+            final_reward = accumulated_reward + reward_config.win_reward
+            if winner >= 0 and winner < len(env.game_state.player_dice_count):
+                winner_dice_count = env.game_state.player_dice_count[winner]
+                if winner_dice_count is not None and reward_config.win_dice_bonus > 0:
+                    final_reward += reward_config.win_dice_bonus * winner_dice_count
+        else:
+            final_reward = accumulated_reward + reward_config.lose_penalty
+        
+        return final_reward
 
     def step_wait(self):
         """
@@ -516,20 +515,16 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 if self.opponent_pool is not None:
                     self._sample_opponents_for_env(i, self.current_step, actual_num_players)
                 
-                # Print game participants information
-                self._print_game_participants(i, actual_num_players, self.current_step)
-                
                 self.current_players[i] = env.game_state.current_player
                 self.active_agent_ids[i] = self.current_players[i]
                 self.episode_info[i] = info
-                # Reset learning agent episode statistics
+                # Reset episode statistics
                 self.learning_agent_episode_reward[i] = 0.0
                 self.learning_agent_episode_length[i] = 0
-                # Reset all agents episode statistics
                 self.all_agents_episode_reward[i] = {}
                 self.all_agents_episode_length[i] = {}
-                # Reset episode done flag
                 self.episode_already_done[i] = False
+                self.vecmonitor_accumulated_reward[i] = 0.0
                 
                 # If first turn is not learning agent, advance to learning agent's turn
                 # Skip only if not in all_learn mode (in all_learn mode, all agents are learning)
@@ -554,8 +549,6 @@ class PerudoMultiAgentVecEnv(VecEnv):
                                     # Re-sample opponents after reset
                                     if self.opponent_pool is not None:
                                         self._sample_opponents_for_env(i, self.current_step, env.num_players)
-                                    # Print game participants information
-                                    self._print_game_participants(i, env.num_players, self.current_step)
                                     self.active_agent_ids[i] = env.game_state.current_player
                                     self.current_players[i] = env.game_state.current_player
                                     # Reset learning agent episode statistics
@@ -564,6 +557,8 @@ class PerudoMultiAgentVecEnv(VecEnv):
                                     # Reset all agents episode statistics
                                     self.all_agents_episode_reward[i] = {}
                                     self.all_agents_episode_length[i] = {}
+                                    # Reset VecMonitor accumulated reward tracker
+                                    self.vecmonitor_accumulated_reward[i] = 0.0
                                     steps = 0  # Start over
                                     continue
                                 continue
@@ -582,10 +577,30 @@ class PerudoMultiAgentVecEnv(VecEnv):
                                 # Handle both dict and array observations
                                 if isinstance(obs_for_opp, dict):
                                     obs_for_predict = {key: np.array([value]) for key, value in obs_for_opp.items()}
+                                    
+                                    # Extract action mask if available and pass it to predict()
+                                    action_masks = None
+                                    if "action_mask" in obs_for_opp:
+                                        mask = obs_for_opp["action_mask"]
+                                        if isinstance(mask, np.ndarray):
+                                            mask = mask.astype(bool)
+                                            if mask.ndim > 1:
+                                                mask = mask.flatten()
+                                            action_masks = np.array([mask])
+                                        elif isinstance(mask, (list, tuple)):
+                                            mask = np.array(mask, dtype=bool)
+                                            if mask.ndim > 1:
+                                                mask = mask.flatten()
+                                            action_masks = np.array([mask])
+                                    
+                                    # Predict with action mask if available
+                                    if action_masks is not None:
+                                        action, _ = opponent_model.predict(obs_for_predict, deterministic=False, action_masks=action_masks)
+                                    else:
+                                        action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
                                 else:
                                     obs_for_predict = obs_for_opp.reshape(1, -1)
-                                
-                                action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
+                                    action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
                                 action = int(action[0])
                                 
                                 env.set_active_player(self.active_agent_ids[i])
@@ -597,8 +612,6 @@ class PerudoMultiAgentVecEnv(VecEnv):
                                     # Re-sample opponents after reset
                                     if self.opponent_pool is not None:
                                         self._sample_opponents_for_env(i, self.current_step, env.num_players)
-                                    # Print game participants information
-                                    self._print_game_participants(i, env.num_players, self.current_step)
                                     self.active_agent_ids[i] = env.game_state.current_player
                                     self.current_players[i] = env.game_state.current_player
                                     # Reset learning agent episode statistics
@@ -607,6 +620,8 @@ class PerudoMultiAgentVecEnv(VecEnv):
                                     # Reset all agents episode statistics
                                     self.all_agents_episode_reward[i] = {}
                                     self.all_agents_episode_length[i] = {}
+                                    # Reset VecMonitor accumulated reward tracker
+                                    self.vecmonitor_accumulated_reward[i] = 0.0
                                     steps = 0  # Start over
                                     continue
                                 
@@ -668,14 +683,6 @@ class PerudoMultiAgentVecEnv(VecEnv):
                     rewards.append(0.0)
                     dones.append(True)
                     
-                    # Use appropriate episode statistics
-                    if all_learn:
-                        episode_reward = self.all_agents_episode_reward[i].get(current_learning_agent, 0.0)
-                        episode_length = self.all_agents_episode_length[i].get(current_learning_agent, 0)
-                    else:
-                        episode_reward = self.learning_agent_episode_reward[i]
-                        episode_length = self.learning_agent_episode_length[i]
-                    
                     # Get episode statistics from environment (before reset)
                     bid_count = getattr(env, 'episode_bid_count', 0)
                     challenge_count = getattr(env, 'episode_challenge_count', 0)
@@ -683,43 +690,65 @@ class PerudoMultiAgentVecEnv(VecEnv):
                     invalid_action_count = getattr(env, 'episode_invalid_action_count', 0)
                     winner = env.game_state.winner if hasattr(env.game_state, "winner") and env.game_state.winner is not None else -1
                     
-                    # Print episode summary (before statistics are reset)
-                    winner_name = f"Player {winner}" if winner >= 0 else "Not determined"
-                    learning_agent_won = winner == 0
-                    win_status = "VICTORY" if learning_agent_won else "DEFEAT"
+                    learning_agent_id = 0
                     
-                    print(f"\n{'='*60}")
-                    print(f"EPISODE COMPLETED")
-                    print(f"{'='*60}")
-                    print(f"Winner: {winner_name} ({'Learning Agent' if learning_agent_won else 'Opponent'})")
-                    print(f"Result for Learning Agent: {win_status}")
-                    print(f"Episode reward: {episode_reward:.2f}")
-                    print(f"Episode length: {episode_length} steps")
-                    print(f"Action statistics:")
-                    print(f"  - Bids made: {bid_count}")
-                    print(f"  - Challenges made: {challenge_count}")
-                    print(f"  - Believe calls: {believe_count}")
-                    print(f"  - Invalid actions: {invalid_action_count}")
-                    print(f"{'='*60}\n")
-                        
-                    infos.append({
+                    # Get reward config
+                    reward_config = getattr(env, 'reward_config', None)
+                    if reward_config is None:
+                        try:
+                            from ..training.config import DEFAULT_CONFIG
+                            reward_config = DEFAULT_CONFIG.reward
+                        except ImportError:
+                            reward_config = None
+                    
+                    # Calculate final reward using accumulated reward
+                    accumulated_reward = self.vecmonitor_accumulated_reward[i]
+                    final_reward = self._calculate_final_reward(env, learning_agent_id, accumulated_reward, reward_config)
+                    
+                    # Get episode length
+                    if all_learn:
+                        episode_length = self.all_agents_episode_length[i].get(current_learning_agent, 0)
+                    else:
+                        episode_length = self.learning_agent_episode_length[i]
+                    
+                    # Print episode summary
+                    learning_agent_won = winner == 0
+                    win_status = "WIN" if learning_agent_won else "DEFEAT"
+                    dice_str = str(list(env.game_state.player_dice_count))
+                    print(f"{win_status} | reward: {final_reward:.2f} | stats: bids={bid_count}, challenges={challenge_count}, believe={believe_count}, invalid={invalid_action_count} | dice: {dice_str}")
+                    
+                    # Calculate step_reward for VecMonitor (difference between final and accumulated)
+                    step_reward = final_reward - accumulated_reward
+                    
+                    # Create episode info dict
+                    info = {
                         "game_over": True,
-                        "winner": env.game_state.winner,
+                        "winner": winner,
                         "episode": {
-                            "r": episode_reward,
-                            "l": episode_length,
+                            "r": float(final_reward),
+                            "l": int(episode_length),
                             "bid_count": bid_count,
                             "challenge_count": challenge_count,
                             "believe_count": believe_count,
                             "invalid_action_count": invalid_action_count,
                             "winner": winner,
                         },
-                    })
+                        "episode_reward": float(final_reward),
+                        "episode_length": int(episode_length),
+                    }
+                    
+                    observations_list.append(obs)
+                    rewards.append(step_reward)
+                    dones.append(True)
+                    infos.append(info)
+                    # Reset VecMonitor accumulated reward tracker for next episode
+                    self.vecmonitor_accumulated_reward[i] = 0.0
                     continue
             
             # Get action: use PPO action for agent 0, or for current agent in all_learn mode
             if current_learning_agent == 0:
                 # Use action from PPO (provided by step_async)
+                # MaskablePPO automatically uses action_masks() method during training
                 action = int(self._actions[i])
             else:
                 # In all_learn mode, get action from current model using predict
@@ -727,9 +756,30 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 obs_for_agent = env.get_observation_for_player(current_learning_agent)
                 if isinstance(obs_for_agent, dict):
                     obs_for_predict = {key: np.array([value]) for key, value in obs_for_agent.items()}
+                    
+                    # Extract action mask if available and pass it to predict()
+                    action_masks = None
+                    if "action_mask" in obs_for_agent:
+                        mask = obs_for_agent["action_mask"]
+                        if isinstance(mask, np.ndarray):
+                            mask = mask.astype(bool)
+                            if mask.ndim > 1:
+                                mask = mask.flatten()
+                            action_masks = np.array([mask])
+                        elif isinstance(mask, (list, tuple)):
+                            mask = np.array(mask, dtype=bool)
+                            if mask.ndim > 1:
+                                mask = mask.flatten()
+                            action_masks = np.array([mask])
+                    
+                    # Predict with action mask if available
+                    if action_masks is not None:
+                        action, _ = self.current_model.predict(obs_for_predict, deterministic=False, action_masks=action_masks)
+                    else:
+                        action, _ = self.current_model.predict(obs_for_predict, deterministic=False)
                 else:
                     obs_for_predict = obs_for_agent.reshape(1, -1)
-                action, _ = self.current_model.predict(obs_for_predict, deterministic=False)
+                    action, _ = self.current_model.predict(obs_for_predict, deterministic=False)
                 action = int(action[0])
             
             env.set_active_player(current_learning_agent)
@@ -738,41 +788,29 @@ class PerudoMultiAgentVecEnv(VecEnv):
             obs, reward, terminated, truncated_flag, info = env.step(action)
             done = terminated or truncated_flag
 
-            # Track learning agent's reward and length (only if episode not already done)
             # Get action validity from info to only count valid actions in episode_length
             action_valid = info.get("action_info", {}).get("action_valid", True)
             
-            if not done:
-                if all_learn:
-                    # Track statistics for all agents in all_learn mode
-                    if current_learning_agent not in self.all_agents_episode_reward[i]:
-                        self.all_agents_episode_reward[i][current_learning_agent] = 0.0
-                        self.all_agents_episode_length[i][current_learning_agent] = 0
-                    self.all_agents_episode_reward[i][current_learning_agent] += reward
-                    # Only increment episode_length for valid actions
-                    if action_valid:
+            # Accumulate reward for learning agent during episode
+            # In normal mode: only agent 0 accumulates reward
+            # In all_learn mode: only agent 0 accumulates reward (for VecMonitor compatibility)
+            if current_learning_agent == 0:
+                # Accumulate reward in vecmonitor_accumulated_reward (single source of truth)
+                self.vecmonitor_accumulated_reward[i] += reward
+                
+                # Track episode length for statistics
+                if action_valid:
+                    if all_learn:
+                        if current_learning_agent not in self.all_agents_episode_length[i]:
+                            self.all_agents_episode_length[i][current_learning_agent] = 0
                         self.all_agents_episode_length[i][current_learning_agent] += 1
-                else:
-                    # Normal mode: only track agent 0
-                    self.learning_agent_episode_reward[i] += reward
-                    # Only increment episode_length for valid actions
-                    if action_valid:
+                    else:
                         self.learning_agent_episode_length[i] += 1
+                
+                if done:
+                    self.episode_already_done[i] = True
             elif done:
-                # Episode just ended, accumulate this step's reward but mark as done
-                if all_learn:
-                    if current_learning_agent not in self.all_agents_episode_reward[i]:
-                        self.all_agents_episode_reward[i][current_learning_agent] = 0.0
-                        self.all_agents_episode_length[i][current_learning_agent] = 0
-                    self.all_agents_episode_reward[i][current_learning_agent] += reward
-                    # Only increment episode_length for valid actions
-                    if action_valid:
-                        self.all_agents_episode_length[i][current_learning_agent] += 1
-                else:
-                    self.learning_agent_episode_reward[i] += reward
-                    # Only increment episode_length for valid actions
-                    if action_valid:
-                        self.learning_agent_episode_length[i] += 1
+                # Episode ended on opponent's turn
                 self.episode_already_done[i] = True
 
             # Update current player
@@ -790,9 +828,10 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 while not done and self.active_agent_ids[i] != 0 and opponent_step_count < max_opponent_steps:
                     opponent_step_count += 1
 
-                    # Skip players with no dice - they can't make moves
+                    # CRITICAL: Skip players with no dice - they have already lost and cannot make moves
+                    # Players with 0 dice are eliminated and should be automatically skipped
+                    # Use next_player() which automatically skips players with 0 dice
                     if env.game_state.player_dice_count[self.active_agent_ids[i]] == 0:
-                        # Use next_player() which automatically skips players with 0 dice
                         env.game_state.next_player()
                         self.current_players[i] = env.game_state.current_player
                         self.active_agent_ids[i] = self.current_players[i]
@@ -800,6 +839,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         if env.game_state.game_over:
                             done = True
                             self.episode_already_done[i] = True
+                        # Continue to next iteration to check next player
                         continue
 
                     # Opponent's turn
@@ -817,11 +857,30 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         # Handle both dict and array observations
                         if isinstance(obs_for_opp, dict):
                             obs_for_predict = {key: np.array([value]) for key, value in obs_for_opp.items()}
+                            
+                            # Extract action mask if available and pass it to predict()
+                            action_masks = None
+                            if "action_mask" in obs_for_opp:
+                                mask = obs_for_opp["action_mask"]
+                                if isinstance(mask, np.ndarray):
+                                    mask = mask.astype(bool)
+                                    if mask.ndim > 1:
+                                        mask = mask.flatten()
+                                    action_masks = np.array([mask])
+                                elif isinstance(mask, (list, tuple)):
+                                    mask = np.array(mask, dtype=bool)
+                                    if mask.ndim > 1:
+                                        mask = mask.flatten()
+                                    action_masks = np.array([mask])
+                            
+                            # Predict with action mask if available
+                            if action_masks is not None:
+                                action, _ = opponent_model.predict(obs_for_predict, deterministic=False, action_masks=action_masks)
+                            else:
+                                action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
                         else:
                             obs_for_predict = obs_for_opp.reshape(1, -1)
-                        
-                        # Get action from opponent model
-                        action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
+                            action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
                         action = int(action[0])
 
                         env.set_active_player(self.active_agent_ids[i])
@@ -838,8 +897,16 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         self.active_agent_ids[i] = self.current_players[i]
 
                         # Store info for later use
-                        # If episode ended on opponent's turn, opp_info will contain "episode" key
-                        info = opp_info
+                        # If episode ended on opponent's turn, we'll override episode info with learning agent's stats later
+                        if done:
+                            # Episode ended on opponent's turn - copy non-episode fields, episode info will be set later
+                            if isinstance(opp_info, dict):
+                                info = {k: v for k, v in opp_info.items() if k not in ("episode", "episode_reward", "episode_length", "winner", "game_over")}
+                            else:
+                                info = {}
+                        else:
+                            # Episode not done, just use opponent's info as-is
+                            info = opp_info
                     else:
                         # No opponent model, skip this step
                         # Use actual number of players for this episode
@@ -847,11 +914,10 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         break
 
             # ===== ШАГ 3: ПРОВЕРКА ЗАВЕРШЕНИЯ И ОБНОВЛЕНИЕ СТАТИСТИКИ =====
-            if done and self.opponent_pool is not None and "winner" in info:
-                winner = info.get("winner")
+            if done and self.opponent_pool is not None:
+                winner = env.game_state.winner if hasattr(env.game_state, "winner") and env.game_state.winner is not None else -1
                 won = winner == 0  # Learning agent is agent 0
                 # Update winrate statistics for opponents
-                # Use actual number of players for this episode
                 actual_num_players = env.num_players
                 for opp_idx in range(1, actual_num_players):
                     if opp_idx - 1 < len(self.opponent_paths[i]):
@@ -859,69 +925,62 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         if opponent_path is not None:
                             self.opponent_pool.update_winrate(opponent_path, won)
 
-            # CRITICAL: VecMonitor expects info["episode"] to exist when done=True
+            # Process episode info when done=True
             # We MUST use learning agent's statistics, not opponent's or environment's
             # This is because episode can end on opponent's turn, but we need stats for learning agent
             if done:
-                # Use appropriate statistics based on mode
-                if all_learn:
-                    # In all_learn mode, use statistics for current learning agent
-                    learning_reward = self.all_agents_episode_reward[i].get(current_learning_agent, 0.0)
-                    learning_length = self.all_agents_episode_length[i].get(current_learning_agent, 0)
-                else:
-                    # Normal mode: use agent 0 statistics
-                    learning_reward = self.learning_agent_episode_reward[i]
-                    learning_length = self.learning_agent_episode_length[i]
-                
-                # Only mark as done if episode just ended (not already done)
-                if not self.episode_already_done[i]:
-                    self.episode_already_done[i] = True
-                
-                # Get episode statistics from environment (bid_count, challenge_count, believe_count, invalid_action_count, winner)
-                # These are tracked for the entire episode, not just learning agent
-                # CRITICAL: Get statistics directly from env attributes BEFORE reset happens
-                # This ensures we get the correct values before they are reset to 0
+                # Get episode statistics from environment
                 bid_count = getattr(env, 'episode_bid_count', 0)
                 challenge_count = getattr(env, 'episode_challenge_count', 0)
                 believe_count = getattr(env, 'episode_believe_count', 0)
                 invalid_action_count = getattr(env, 'episode_invalid_action_count', 0)
                 winner = env.game_state.winner if hasattr(env.game_state, "winner") and env.game_state.winner is not None else -1
                 
-                # Print episode summary (before statistics are reset)
-                winner_name = f"Player {winner}" if winner >= 0 else "Not determined"
+                learning_agent_id = 0
+                
+                # Get reward config
+                reward_config = getattr(env, 'reward_config', None)
+                if reward_config is None:
+                    try:
+                        from ..training.config import DEFAULT_CONFIG
+                        reward_config = DEFAULT_CONFIG.reward
+                    except ImportError:
+                        reward_config = None
+                
+                # Calculate final reward using accumulated reward
+                accumulated_reward = self.vecmonitor_accumulated_reward[i]
+                final_reward = self._calculate_final_reward(env, learning_agent_id, accumulated_reward, reward_config)
+                
+                # Get episode length
+                if all_learn:
+                    episode_length = self.all_agents_episode_length[i].get(learning_agent_id, 0)
+                else:
+                    episode_length = self.learning_agent_episode_length[i]
+                
+                # Print episode summary
                 learning_agent_won = winner == 0
-                win_status = "VICTORY" if learning_agent_won else "DEFEAT"
+                win_status = "WIN" if learning_agent_won else "DEFEAT"
+                dice_str = str(list(env.game_state.player_dice_count))
+                print(f"{win_status} | reward: {final_reward:.2f} | stats: bids={bid_count}, challenges={challenge_count}, believe={believe_count}, invalid={invalid_action_count} | dice: {dice_str}")
                 
-                print(f"\n{'='*60}")
-                print(f"EPISODE COMPLETED")
-                print(f"{'='*60}")
-                print(f"Winner: {winner_name} ({'Learning Agent' if learning_agent_won else 'Opponent'})")
-                print(f"Result for Learning Agent: {win_status}")
-                print(f"Episode reward: {learning_reward:.2f}")
-                print(f"Episode length: {learning_length} steps")
-                print(f"Action statistics:")
-                print(f"  - Bids made: {bid_count}")
-                print(f"  - Challenges made: {challenge_count}")
-                print(f"  - Believe calls: {believe_count}")
-                print(f"  - Invalid actions: {invalid_action_count}")
-                print(f"{'='*60}\n")
+                # Ensure info dict exists
+                if not isinstance(info, dict):
+                    info = {}
                 
-                # Override episode info with learning agent's statistics, but keep episode statistics (bid_count, etc.)
+                # Create episode info with learning agent's statistics (overwrite any existing episode info)
                 info["episode"] = {
-                    "r": learning_reward,
-                    "l": learning_length,
+                    "r": float(final_reward),
+                    "l": int(episode_length),
                     "bid_count": bid_count,
                     "challenge_count": challenge_count,
                     "believe_count": believe_count,
                     "invalid_action_count": invalid_action_count,
                     "winner": winner,
                 }
-                info["episode_reward"] = learning_reward
-                info["episode_length"] = learning_length
-                
-                # Keep winner info if available
-                if "winner" not in info and hasattr(env.game_state, "winner"):
-                    info["winner"] = env.game_state.winner
+                info["episode_reward"] = float(final_reward)
+                info["episode_length"] = int(episode_length)
+                info["winner"] = winner
+                info["game_over"] = True
 
             # Get observation for learning agent
             if obs is None:
@@ -933,8 +992,29 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 obs = env.get_observation_for_player(0)
 
             observations_list.append(obs)
-            rewards.append(reward)
-            # Combine terminated and truncated into dones for VecMonitor compatibility
+            
+            # Calculate step_reward for VecMonitor
+            # VecMonitor accumulates rewards from step_reward on every step
+            if done:
+                # Episode ended: calculate step_reward as difference between final reward and accumulated reward
+                if "episode" in info and "r" in info["episode"]:
+                    final_episode_reward = info["episode"]["r"]
+                    step_reward = final_episode_reward - self.vecmonitor_accumulated_reward[i]
+                else:
+                    # No episode info (shouldn't happen), return 0.0
+                    step_reward = 0.0
+                # Reset accumulated reward for next episode
+                self.vecmonitor_accumulated_reward[i] = 0.0
+            else:
+                # During episode: return reward for learning agent (agent 0), 0.0 for opponent
+                if current_learning_agent == 0:
+                    # Learning agent's step, return actual reward (already accumulated in vecmonitor_accumulated_reward above)
+                    step_reward = reward
+                else:
+                    # Opponent's step, learning agent gets 0 reward
+                    step_reward = 0.0
+            
+            rewards.append(step_reward)
             dones.append(done)
             infos.append(info)
 

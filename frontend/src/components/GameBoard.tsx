@@ -196,7 +196,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         </div>
       )}
 
-      <GameHistory bidHistory={gameState.bid_history} currentBid={gameState.current_bid} />
+      <GameHistory 
+        bidHistory={gameState.bid_history} 
+        currentBid={gameState.current_bid}
+        extendedActionHistory={gameState.extended_action_history}
+      />
     </div>
   );
 };

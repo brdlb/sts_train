@@ -284,6 +284,7 @@ def calculate_reward(
     believe_success: Optional[bool] = None,
     dice_lost: int = 0,
     reward_config: Optional[RewardConfig] = None,
+    winner_dice_count: Optional[int] = None,
 ) -> float:
     """
     Calculate reward for agent.
@@ -297,6 +298,7 @@ def calculate_reward(
         believe_success: Whether believe succeeded (if applicable)
         dice_lost: Number of dice lost
         reward_config: Reward configuration (uses DEFAULT_CONFIG if not provided)
+        winner_dice_count: Number of dice remaining for winner (if game is over and player won)
 
     Returns:
         Reward
@@ -307,8 +309,13 @@ def calculate_reward(
     reward = 0.0
 
     # Reward for winning game
+    # NOTE: lose_penalty is NOT applied here - it's applied in perudo_vec_env.py
+    # when calculating final reward to avoid double application
     if game_over and winner == player_id:
         reward += reward_config.win_reward
+        # Add bonus for remaining dice if winner_dice_count is provided
+        if winner_dice_count is not None and reward_config.win_dice_bonus > 0:
+            reward += reward_config.win_dice_bonus * winner_dice_count
 
     # Penalty for losing dice
     if dice_lost > 0:

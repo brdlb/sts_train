@@ -342,14 +342,27 @@ class GameState:
             self._check_game_over()
 
     def _check_game_over(self) -> None:
-        """Check if game is over."""
+        """
+        Check if game is over.
+        
+        Game ends when exactly one player has dice remaining.
+        That player is declared the winner.
+        """
         players_with_dice = sum(1 for count in self.player_dice_count if count > 0)
+        
+        # Game ends when exactly one player has dice
         if players_with_dice == 1:
             self.game_over = True
+            # Find and set the winner (the only player with dice > 0)
             for i, count in enumerate(self.player_dice_count):
                 if count > 0:
                     self.winner = i
                     break
+        elif players_with_dice == 0:
+            # Edge case: no players with dice (shouldn't happen in normal gameplay)
+            # But handle it gracefully - no winner
+            self.game_over = True
+            self.winner = None
 
     def get_public_info(self) -> dict:
         """

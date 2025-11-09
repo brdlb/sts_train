@@ -3,10 +3,11 @@ API endpoints for model management.
 """
 
 from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 
 from ..game_server import GameServer
+from ..config import web_config
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
@@ -25,9 +26,9 @@ class ModelInfo(BaseModel):
 
     id: str
     path: str
-    step: int = None
-    elo: float = None
-    winrate: float = None
+    step: Optional[int] = None
+    elo: Optional[float] = None
+    winrate: Optional[float] = None
     source: str
 
 
@@ -42,8 +43,29 @@ async def list_models():
     if game_server is None:
         raise HTTPException(status_code=500, detail="Game server not initialized")
 
-    models = game_server.get_available_models()
-    return [ModelInfo(**model) for model in models]
+    try:
+        models = game_server.get_available_models()
+        # Convert to ModelInfo, handling any validation errors
+        result = []
+        for model in models:
+            try:
+                result.append(ModelInfo(**model))
+            except Exception as e:
+                # Skip models that don't match the expected schema
+                import traceback
+                print(f"Warning: Skipping invalid model data: {model}, error: {e}")
+                if web_config.debug:
+                    traceback.print_exc()
+                continue
+        return result
+    except Exception as e:
+        # Return detailed error message
+        import traceback
+        error_detail = f"Failed to load models: {str(e)}"
+        print(f"ERROR: {error_detail}")
+        if web_config.debug:
+            traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @router.get("/{model_id}/info", response_model=ModelInfo)
@@ -60,13 +82,32 @@ async def get_model_info(model_id: str):
     if game_server is None:
         raise HTTPException(status_code=500, detail="Game server not initialized")
 
-    models = game_server.get_available_models()
-    model = next((m for m in models if m["id"] == model_id or m["path"] == model_id), None)
+    try:
+        models = game_server.get_available_models()
+        model = next((m for m in models if m["id"] == model_id or m["path"] == model_id), None)
 
-    if model is None:
-        raise HTTPException(status_code=404, detail="Model not found")
+        if model is None:
+            raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
 
-    return ModelInfo(**model)
+        try:
+            return ModelInfo(**model)
+        except Exception as e:
+            error_detail = f"Invalid model data for {model_id}: {str(e)}"
+            print(f"ERROR: {error_detail}")
+            if web_config.debug:
+                import traceback
+                traceback.print_exc()
+            raise HTTPException(status_code=500, detail=error_detail)
+    except HTTPException:
+        # Re-raise HTTP exceptions (like 404)
+        raise
+    except Exception as e:
+        error_detail = f"Failed to get model info: {str(e)}"
+        print(f"ERROR: {error_detail}")
+        if web_config.debug:
+            import traceback
+            traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @router.post("/validate")

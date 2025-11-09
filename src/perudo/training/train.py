@@ -259,22 +259,26 @@ class AdvantageNormalizationCallback(BaseCallback):
 class SelfPlayTrainingCallback(BaseCallback):
     """
     Callback for self-play training with opponent pool.
+    
+    Snapshot saving behavior:
+    - If save_snapshot_every_cycle=True (default): saves snapshot every snapshot_cycle_freq training cycles
+    - If save_snapshot_every_cycle=False: saves snapshot every snapshot_freq steps (for backward compatibility)
     """
     def __init__(
         self,
         opponent_pool: OpponentPool,
-        snapshot_freq: int = 50000,
+        snapshot_freq: int = 50000,  # Only used when save_snapshot_every_cycle=False
         verbose: int = 0,
         debug: bool = False,
         save_snapshot_every_cycle: bool = True,
-        snapshot_cycle_freq: int = 10
+        snapshot_cycle_freq: int = 1  # Frequency of saving snapshots in training cycles (when save_snapshot_every_cycle=True)
     ):
         super().__init__(verbose)
         self.opponent_pool = opponent_pool
         self.snapshot_freq = snapshot_freq
         self.debug = debug
         self.save_snapshot_every_cycle = save_snapshot_every_cycle
-        self.snapshot_cycle_freq = snapshot_cycle_freq  # Сохранять снапшот каждые N циклов обучения
+        self.snapshot_cycle_freq = snapshot_cycle_freq  # Сохранять снапшот каждые snapshot_cycle_freq циклов обучения
         self.current_step = 0
         self.training_cycle_count = 0  # Счетчик циклов обучения
         self.vec_env = None
@@ -296,6 +300,13 @@ class SelfPlayTrainingCallback(BaseCallback):
             self._underlying_env = self.vec_env.envs[0] if hasattr(self.vec_env.envs, '__getitem__') else None
         else:
             self._underlying_env = None
+        
+        # Verify logger is available
+        if not hasattr(self, 'logger') or self.logger is None:
+            if self.verbose > 0:
+                print("Warning: Logger not available in SelfPlayTrainingCallback._on_training_start()")
+        elif self.verbose > 1:
+            print(f"Logger initialized in SelfPlayTrainingCallback: {type(self.logger)}")
     
     def _on_training_end(self) -> None:
         """Called when training ends."""
@@ -381,6 +392,17 @@ class SelfPlayTrainingCallback(BaseCallback):
         # Увеличиваем счетчик циклов обучения
         self.training_cycle_count += 1
         
+        # Log training cycle completion
+        current_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
+        n_steps = getattr(self.model, 'n_steps', 'N/A')
+        if self.verbose > 0:
+            print(f"\n{'='*70}")
+            print(f"✓ Training cycle {self.training_cycle_count} completed!")
+            print(f"  Total steps: {current_step}")
+            print(f"  Steps per cycle: {n_steps}")
+            print(f"  Next cycle: collecting {n_steps} more steps before next update...")
+            print(f"{'='*70}\n")
+        
         # Set flag to save snapshot after model update (in next _on_step())
         # Сохраняем снапшот только каждые snapshot_cycle_freq циклов
         if self.save_snapshot_every_cycle and self.training_cycle_count % self.snapshot_cycle_freq == 0:
@@ -389,6 +411,10 @@ class SelfPlayTrainingCallback(BaseCallback):
                 print(f"Training cycle {self.training_cycle_count}: will save snapshot after model update")
         
         # Log collected statistics to TensorBoard
+        # Note: In SB3, logger is available after _on_training_start() is called
+        # We log metrics in _on_rollout_end() which is called before model.update()
+        # The metrics will be written to TensorBoard when logger.dump() is called
+        # after model.update() completes (this happens automatically in SB3)
         with self._lock:
             if len(self.episode_rewards) > 0:
                 # Calculate statistics from collected episodes
@@ -399,9 +425,16 @@ class SelfPlayTrainingCallback(BaseCallback):
                 # Log to TensorBoard using logger (if available)
                 # In SB3, BaseCallback has access to self.logger which is a Logger instance
                 # The logger is initialized by the model when learn() is called
+                # Logger is set in BaseCallback._init_callback() which is called before _on_training_start()
                 if hasattr(self, 'logger') and self.logger is not None:
                     try:
+                        # Get current step from model for correct step synchronization
+                        # In _on_rollout_end(), model hasn't been updated yet, so we use current num_timesteps
+                        current_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else None
+                        
                         # Log custom metrics
+                        # Note: logger.record() adds metrics to buffer, they will be written to TensorBoard
+                        # when logger.dump() is called after model.update() (automatic in SB3)
                         self.logger.record("custom/mean_episode_reward", mean_reward)
                         self.logger.record("custom/mean_episode_length", mean_length)
                         self.logger.record("custom/win_rate", win_rate)
@@ -417,10 +450,18 @@ class SelfPlayTrainingCallback(BaseCallback):
                             avg_winrate = pool_stats.get("average_winrate", 0.0)
                             if avg_winrate is not None:
                                 self.logger.record("custom/opponent_pool_avg_winrate", avg_winrate)
+                        
+                        # In SB3, logger.dump() is called automatically after model.update()
+                        # However, to ensure custom metrics are written, we can call it explicitly
+                        # But this should not be necessary as SB3 handles it automatically
+                        # We rely on SB3's automatic dump() call after model.update()
+                        
                     except Exception as e:
                         # Don't crash training if logging fails
                         if self.verbose > 0:
                             print(f"Warning: Failed to log metrics to TensorBoard: {e}")
+                            import traceback
+                            traceback.print_exc()
                 elif self.verbose > 1:
                     # Debug: log when logger is not available
                     print("Debug: Logger not available in callback (this is normal before learn() is called)")
@@ -486,6 +527,7 @@ class SelfPlayTraining:
         # Create vectorized environment
         # Use transformer_history_length from config if available, otherwise use history_length
         max_history_length = getattr(config.training, 'transformer_history_length', config.game.history_length)
+        debug_moves = getattr(config.training, 'debug_moves', False)
         vec_env_raw = PerudoMultiAgentVecEnv(
             num_envs=self.num_envs,
             num_players=self.num_players,
@@ -499,6 +541,7 @@ class SelfPlayTraining:
             min_players=config.game.min_players,
             max_players=config.game.max_players,
             reward_config=config.reward,
+            debug_moves=debug_moves,
         )
         
         # Wrap with ActionMasker to enable action masking for MaskablePPO
@@ -703,7 +746,6 @@ class SelfPlayTraining:
         # Self-play callback
         selfplay_callback = SelfPlayTrainingCallback(
             opponent_pool=self.opponent_pool,
-            snapshot_freq=50000,
             verbose=self.config.training.verbose,
             debug=False
         )
@@ -793,6 +835,12 @@ def main():
         default=None,
         help="Device to use for training (cpu, cuda, cuda:0, etc.). If not specified, auto-detects GPU with CPU fallback.",
     )
+    parser.add_argument(
+        "--verbose",
+        type=int,
+        default=1,
+        help="Verbosity level (0 = no output, 1 = progress bars and logs, 2 = debug). Default: 1",
+    )
     
     args = parser.parse_args()
     
@@ -802,6 +850,7 @@ def main():
     config.training.n_steps = args.n_steps
     config.training.batch_size = args.batch_size
     config.training.device = args.device
+    config.training.verbose = args.verbose  # Set verbose from command line
     
     # Override num_envs from command line if provided
     if args.num_envs is not None:

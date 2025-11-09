@@ -1,397 +1,141 @@
 # Perudo RL Environment
 
-Среда для обучения ботов в игре Perudo с использованием Reinforcement Learning.
+Reinforcement Learning environment for training AI agents to play Perudo (Liar's Dice).
 
-## Описание
+## Description
 
-Этот проект реализует среду для обучения агентов с подкреплением (RL) в игре Perudo (Первый) с использованием:
-- **PyTorch** - фреймворк для глубокого обучения
-- **Stable Baselines3** - библиотека RL алгоритмов
-- **Gymnasium** - стандарт для создания игровых сред
-- **TensorBoard** - мониторинг обучения
+This project implements a Reinforcement Learning (RL) environment for the Perudo game using:
+- **PyTorch** - Deep learning framework
+- **Stable Baselines3** - RL algorithms library
+- **Gymnasium** - Standard for creating game environments
+- **TensorBoard** - Training monitoring
 
-## Особенности
+## Key Features
 
-### Основная функциональность
+- **Parameter Sharing** - Single neural network for all agents, enabling efficient multi-agent training
+- **Self-Play with Opponent Pool** - Automatic snapshot management with ELO rating system
+- **Vectorized Environment** - Each VecEnv instance represents one table with 3-8 players
+- **Global Advantage Normalization** - Advantages normalized across the entire batch
+- **Random Player Count** - Each episode randomly selects 3-8 players for training diversity
+- **Extended Reward System** - Detailed reward system with intermediate rewards for bluffing, successful challenges, and dice advantage
+- **Classic Perudo Rules** - Support for special rounds (Palifico), Paco, and special "ones" rules (Pasari/Jokers)
 
-- **Parameter Sharing** - одна нейросеть для всех агентов, что позволяет эффективно обучать несколько агентов одновременно
-- **Agent ID в Observation** - каждый агент получает свой уникальный идентификатор (one-hot encoding) в observation, что позволяет специализировать поведение
-- **Векторизованная среда** - каждый VecEnv экземпляр представляет один стол с переменным количеством агентов (3-8 игроков), что позволяет параллельно обучать на множестве столов
-- **Self-Play с Opponent Pool** - система пула оппонентов для самообучения:
-  - Автоматическое сохранение снапшотов политики каждые N шагов (по умолчанию 50k)
-  - Хранение последних 10-20 снапшотов (max_pool_size=20, min_pool_size=10)
-  - Взвешенный выбор оппонентов на основе winrate, ELO рейтинга и количества игр
-  - Автоматическая очистка старых снапшотов с сохранением лучших (keep_best=3)
-  - Отслеживание ELO рейтинга для каждого снапшота и текущей политики
-  - Метadata хранится в `pool_metadata.json`
-- **Глобальная нормализация Advantages** - advantages нормализуются по всему объединенному батчу (n_steps × num_envs × num_agents)
-- **Случайное количество игроков** - в каждом эпизоде случайно выбирается от 3 до 8 игроков для разнообразия обучения
-- **Расширенная Reward система** - детальная система наград с промежуточными наградами за блеф, успешные вызовы, защиту ставок и преимущество по костям
-- Классические правила Perudo с поддержкой специальных раундов (пальфико), пакао и особых правил для "ones" (pasari/jokers)
-- **Автоматическое определение устройства** - автоматический выбор GPU с fallback на CPU
-- **Продолжение обучения** - автоматическое обнаружение и загрузка последней сохраненной модели
-- Интеграция с TensorBoard для визуализации метрик
-- VecMonitor для записи статистики эпизодов в CSV файлы
+## Installation
 
-### Архитектура
+1. Clone the repository
 
-- **Parameter Sharing**: Одна PPO модель для всех агентов, идентификация через agent_id в observation
-- **Векторизация**: Каждый environment = 1 стол с переменным количеством игроков (3-8), один из которых - обучающийся агент (agent_id=0), остальные - оппоненты из пула
-- **Batch Processing**: Эффективный батч = n_steps × num_envs × num_players, обеспечивающий большое количество данных для обучения
-- **Observation Space**: Поддерживает до 8 игроков (max_num_players), что позволяет обрабатывать переменное количество игроков в эпизодах
-
-## Установка
-
-1. Клонируйте репозиторий или создайте новый проект
-
-2. Установите зависимости:
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Убедитесь, что у вас установлен PyTorch с поддержкой CUDA (если используете GPU):
+3. Install PyTorch with CUDA support (if using GPU):
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu118
 ```
 
-## Структура проекта
+## Usage
 
-```
-.
-├── src/
-│   └── perudo/
-│       ├── __init__.py
-│       ├── game/              # Логика игры Perudo
-│       │   ├── game_state.py  # Состояние игры
-│       │   ├── rules.py       # Правила игры
-│       │   ├── perudo_env.py  # Gymnasium environment
-│       │   └── perudo_vec_env.py  # Векторизованная среда для self-play
-│       ├── agents/            # Агенты для обучения
-│       │   ├── base_agent.py  # Базовый класс агента
-│       │   └── rl_agent.py    # RL агент на базе SB3
-│       ├── training/          # Модули обучения
-│       │   ├── config.py      # Конфигурация обучения
-│       │   ├── train.py       # Главный скрипт обучения с parameter sharing
-│       │   └── opponent_pool.py  # Управление пулом оппонентов
-│       └── utils/             # Вспомогательные функции
-│           └── helpers.py     # Утилиты (encoding/decoding, observation, rewards)
-├── tests/                     # Тесты
-│   ├── test_game_state.py
-│   ├── test_perudo_env.py
-│   ├── test_perudo_vec_env.py
-│   ├── test_opponent_pool.py
-│   ├── test_helpers.py
-│   └── test_rules.py
-├── examples/                  # Примеры использования
-│   └── opponent_selection_example.py  # Примеры работы с opponent pool
-├── logs/                      # Логи и метрики
-│   ├── monitor/               # CSV файлы от VecMonitor
-│   └── perudo_training_*/    # TensorBoard логи
-├── models/                    # Сохраненные модели
-│   ├── perudo_model_*_steps.zip  # Чекпоинты модели
-│   ├── perudo_model_final.zip   # Финальная модель
-│   └── opponent_pool/        # Снапшоты оппонентов
-│       ├── pool_metadata.json # Метаданные пула (ELO, winrate)
-│       └── snapshot_step_*.zip  # Снапшоты политик
-├── visualize_training.py     # Скрипт для визуализации обучения
-├── requirements.txt
-└── README.md
-```
-
-## Использование
-
-### Базовый запуск обучения
+### Basic Training
 
 ```bash
 python -m src.perudo.training.train
 ```
 
-### Запуск с параметрами
+### Training with Parameters
 
 ```bash
 python -m src.perudo.training.train \
-    --num-players 4 \
     --num-envs 8 \
     --total-timesteps 10000000 \
     --n-steps 1024 \
-    --batch-size 128 \
-    --device cuda
+    --batch-size 128
 ```
 
-### Параметры командной строки
+### Command Line Arguments
 
-- `--num-players` - количество игроков за столом (по умолчанию 4, но в эпизодах случайно выбирается 3-8)
-- `--num-envs` - количество параллельных сред/столов (по умолчанию 8)
-- `--total-timesteps` - общее количество шагов обучения (по умолчанию 10_000_000)
-- `--n-steps` - количество шагов для сбора данных перед обновлением (по умолчанию 1024)
-- `--batch-size` - размер батча для обучения (по умолчанию 128)
-- `--device` - устройство для обучения (cpu, cuda, cuda:0 и т.д.). Если не указано, автоматически определяется GPU с fallback на CPU
+- `--num-envs` - Number of parallel environments/tables (default: 8)
+- `--total-timesteps` - Total training steps (default: 10_000_000)
+- `--n-steps` - Steps to collect before update (default: 1024)
+- `--batch-size` - Training batch size (default: 128)
+- `--device` - Device for training (cpu, cuda, cuda:0). Auto-detects GPU if not specified
 
-**Важно**: Убедитесь, что `n_steps × num_envs × num_players` делится на `batch_size` без остатка.
+**Note**: Ensure that `n_steps × num_envs × num_players` is divisible by `batch_size`.
 
-### Программное использование
-
-```python
-from src.perudo.training.train import SelfPlayTraining
-from src.perudo.training.config import DEFAULT_CONFIG
-
-# Создать конфигурацию
-config = DEFAULT_CONFIG
-config.game.num_players = 4
-config.training.total_timesteps = 10_000_000
-config.training.n_steps = 1024
-config.training.batch_size = 128
-config.training.device = None  # Автоматическое определение GPU/CPU
-
-# Запустить обучение
-trainer = SelfPlayTraining(config)
-trainer.train()
-```
-
-**Примечание**: Обучение автоматически продолжается с последней сохраненной модели, если она найдена в директории `models/`.
-
-### Просмотр метрик в TensorBoard
+### View Training Metrics
 
 ```bash
 tensorboard --logdir=logs/
 ```
 
-
-## Архитектура обучения
+## Architecture
 
 ### Parameter Sharing
 
-Вместо обучения отдельных моделей для каждого агента, используется одна модель PPO для всех агентов. Агенты идентифицируются через one-hot encoding agent_id в observation vector. Это позволяет:
+Single PPO model for all agents, identified via agent_id in observation. This enables:
+- Efficient data usage from all agents
+- Agent specialization through agent_id
+- Reduced memory and computational requirements
 
-- Эффективно использовать данные от всех агентов
-- Обучать агентов с разными стратегиями (специализация через agent_id)
-- Сократить использование памяти и вычислительных ресурсов
+### Vectorized Environment
 
-### Векторизованная среда
+`PerudoMultiAgentVecEnv` creates multiple parallel environments (tables):
+- **Agent 0** - Learning agent (uses current PPO model)
+- **Agents 1-N** - Opponents selected from opponent pool
 
-`PerudoMultiAgentVecEnv` создает несколько параллельных сред (столов), где каждая среда содержит 4 агентов:
-
-- **Agent 0** - обучающийся агент (использует текущую PPO модель)
-- **Agents 1-3** - оппоненты, выбираемые из opponent pool
-
-При каждом `reset()` оппоненты выбираются из пула на основе winrate статистики.
+Opponents are selected from the pool based on winrate statistics at each `reset()`.
 
 ### Opponent Pool
 
-Opponent pool управляет снапшотами политик для self-play:
+Manages policy snapshots for self-play:
+- **Automatic Snapshots** - Saved every N steps (default: 50k, configurable via `snapshot_freq`)
+- **Pool Management** - Stores last 10-20 snapshots (max_pool_size=20, min_pool_size=10)
+- **Weighted Selection** - Based on winrate, ELO rating, and number of games
+- **ELO System** - Each snapshot has ELO rating (initial: 1500, K-factor: 32)
+- **Auto Cleanup** - Removes old snapshots while keeping best by ELO (keep_best=3)
+- **Metadata** - Statistics stored in `models/opponent_pool/pool_metadata.json`
 
-1. **Сохранение снапшотов**: Автоматически каждые N шагов (по умолчанию 50k, настраивается через `snapshot_freq`)
-2. **Хранение**: Последние 10-20 снапшотов (max_pool_size=20, min_pool_size=10)
-3. **Выбор оппонентов**: Взвешенный выбор на основе комбинации факторов:
-   - **Winrate** - более сильные оппоненты (с низким winrate против текущей политики) выбираются чаще
-   - **ELO рейтинг** - оппоненты с высоким ELO получают больший вес
-   - **Количество игр** - больше игр = более надежная статистика (логарифмическое масштабирование)
-   - Формула веса: `weight = (1 - winrate) × (1 + 0.2 × confidence + 0.3 × elo_normalized)`
-4. **ELO система**: 
-   - Каждый снапшот и текущая политика имеют ELO рейтинг (начальный: 1500)
-   - ELO обновляется после каждой игры с использованием K-фактора (K=32)
-   - ELO ограничен диапазоном 0-3000
-5. **Статистика**: Отслеживание winrate, ELO, количества игр и побед для каждого снапшота
-6. **Очистка**: Автоматическое удаление старых снапшотов с сохранением лучших по ELO (keep_best=3)
-7. **Метаданные**: Вся статистика хранится в `models/opponent_pool/pool_metadata.json`
+## Project Structure
 
-При каждом `reset()` оппоненты выбираются из пула на основе взвешенного выбора. Можно также явно указать конкретные снапшоты для использования (см. примеры в `examples/opponent_selection_example.py`).
-
-### Batch Processing
-
-Эффективный размер батча рассчитывается как:
 ```
-effective_batch_size = n_steps × num_envs × num_players
+.
+├── src/perudo/
+│   ├── game/              # Perudo game logic
+│   ├── agents/            # RL agents
+│   ├── training/          # Training modules
+│   └── utils/             # Helper functions
+├── tests/                 # Tests
+├── logs/                  # Logs and metrics
+├── models/                # Saved models
+│   └── opponent_pool/     # Opponent snapshots
+└── requirements.txt
 ```
 
-Advantages нормализуются глобально по всему батчу перед обновлением модели.
+## Configuration
 
-## Reward система
+Training parameters are configured in `src/perudo/training/config.py`. Key parameters:
 
-Детальная система наград для обучения агента. **Важно**: Награды масштабированы консервативно (примерно 1/20 от исходных значений) для обеспечения стабильности обучения PPO. Это предотвращает большие колебания наград (-500 до +500) и поддерживает их в стабильном диапазоне (-20 до +20) за эпизод.
+- **Game**: `num_players`, `dice_per_player`, `max_quantity`
+- **Training**: `learning_rate`, `n_steps`, `batch_size`, `gamma`, `gae_lambda`
+- **Opponent Pool**: `max_pool_size`, `snapshot_freq`, `elo_k`
 
-### Основные награды:
+## Game Rules (Brief)
 
-- **Победа в игре**: +5.0 (когда агент остается последним игроком)
-- **Потеря кости**: -0.5 за каждую потерянную кость
+Perudo is a dice game with bluffing and incomplete information:
+- Each player starts with 5 dice
+- Players make bids on total dice count of a specific value
+- **Challenge** - Call out previous player's bid
+- **Believe** - All players reveal dice, exact match check
+- **Special Round (Palifico)** - Activated when player has 1 die (ones are not jokers)
+- Last player with dice wins
 
-### Награды за действия:
+## Testing
 
-- **Успешный challenge/believe**: +0.1 (когда агент успешно поймал блеф оппонента)
-- **Неудачный challenge/believe**: -0.1 (когда агент вызвал и ошибся, что привело к потере кости)
-
-### Промежуточные награды (в конце раунда, накапливаются!):
-
-- **Раунд без потери кости**: +0.05 (когда агент не потерял кость в раунде)
-- **Успешный блеф**: +0.25 (когда агент сделал ставку, которая не была вызвана или была успешно защищена)
-- **Неудачная ставка**: -0.1 (когда ставка агента была успешно вызвана оппонентом)
-
-### Deferred награды (отложенные):
-
-- **Защита ставки от challenge**: +0.1 (когда оппонент вызвал ставку агента и ошибся)
-- **Защита ставки от believe**: +0.25 (когда оппонент вызвал believe на ставку агента и ошибся)
-
-### Преимущество по костям (начисляется каждый шаг, накапливается!):
-
-- **Преимущество по костям**: +0.03 за каждую кость преимущества над средним количеством костей оппонентов (максимум +0.15 для 5 костей преимущества)
-- **Бонус лидера**: +0.1 (когда агент имеет больше костей, чем все оппоненты)
-
-### Невалидные действия:
-
-- **Невалидное действие**: -0.05 (штраф за попытку сделать недопустимое действие)
-
-## Правила игры Perudo
-
-Perudo - это игра в кости с элементами блефа и неполной информацией. 
-
-### Основные правила:
-
-- Каждый игрок начинает с 5 костями
-- **Случайное количество игроков**: В каждом эпизоде случайно выбирается от 3 до 8 игроков
-- Игроки делают ставки на общее количество костей определенного значения на всех костях
-- Ставка должна быть выше предыдущей согласно правилам:
-  - Количество может увеличиваться
-  - При одинаковом количестве значение должно увеличиваться
-  - При увеличении количества можно использовать любое значение
-  - **Специальные правила для "ones" (pasari)**:
-    - Если предыдущая ставка была на "ones" (value=1), новая ставка должна либо увеличить количество ones, либо использовать другое значение с количеством >= 2×prev_ones + 1
-    - Если новая ставка на "ones", можно уменьшить количество вдвое (округление вверх)
-    - Первая ставка в раунде не может быть на "ones" (кроме special round)
-- **Special Round (Пальфико)**: 
-  - Активируется когда игрок остается с 1 костью
-  - Игрок может объявить special round один раз (только если активных игроков > 2)
-  - В special round: ones НЕ являются джокерами (считаются только точные совпадения)
-  - В special round: нельзя менять значение кости в последующих ставках
-  - Первая ставка в special round должна быть quantity=1, любое значение (включая 1)
-- **Challenge (Вызов)**: 
-  - Можно вызвать предыдущего игрока - если ставка неверна, проигравший теряет кость
-  - Если challenge успешен (ставка была неверна) - игрок, сделавший ставку, теряет кость
-  - Если challenge неуспешен - challenger теряет кость
-- **Believe**: 
-  - Все игроки показывают кости, проверяется точное совпадение ставки
-  - Если количество костей **точно равно** ставке:
-    - Believer получает кость (если у него < 5 костей) или начинает следующий раунд (если 5 костей)
-  - Если количество костей **не равно** ставке:
-    - Believer теряет кость
-- Проигравшие теряют кости
-- Побеждает последний оставшийся игрок (последний с костями)
-
-### Особенности реализации:
-
-- **Observation space**: Поддерживает до 8 игроков (max_num_players), что позволяет обрабатывать переменное количество игроков в эпизодах
-- **Action space**: 2 специальных действия (challenge, believe) + 180 возможных ставок (30×6)
-- **История ставок**: Хранится последние 10 ставок в observation
-- **Скрытая информация**: Каждый игрок видит только свои кости, остальная информация публична
-
-## Дополнительные возможности
-
-### Автоматическое определение устройства
-
-Система автоматически определяет доступность GPU и использует его, если доступен. В противном случае используется CPU. Это поведение можно переопределить через параметр `--device`:
-
-```bash
-# Принудительно использовать CPU
-source .venv/Scripts/activate && python -m src.perudo.training.train --device cpu
-
-
-# Указать конкретный GPU
-source .venv/Scripts/activate && python -m src.perudo.training.train --device cuda:0
-```
-
-### Продолжение обучения
-
-Система автоматически ищет последнюю сохраненную модель в директории `models/` и продолжает обучение с нее. Формат имен файлов:
-- `perudo_model_<steps>_steps.zip` - чекпоинты модели
-- `perudo_model_final.zip` - финальная модель
-
-Если найдено несколько моделей, используется наиболее свежая (по времени модификации).
-
-### Примеры использования Opponent Pool
-
-См. файл `examples/opponent_selection_example.py` для примеров:
-- Список всех доступных снапшотов
-- Получение конкретного снапшота по ID или шагу обучения
-- Использование лучшего снапшота по ELO
-- Явное указание оппонентов при reset() окружения
-- Загрузка моделей из любого пути
-
-### CSV статистика
-
-VecMonitor автоматически сохраняет статистику эпизодов в CSV файлы в директории `logs/monitor/`. Каждый файл содержит:
-- `r` - награда эпизода
-- `l` - длина эпизода (количество шагов)
-- `t` - время эпизода
-- `bid_count` - количество ставок в эпизоде
-- `challenge_count` - количество вызовов
-- `believe_count` - количество вызовов believe
-- `winner` - ID победителя
-
-## Тестирование
-
-Запустить все тесты:
-
+Run all tests:
 ```bash
 pytest tests/ -v
 ```
 
-Запустить конкретный тест:
-
-```bash
-pytest tests/test_perudo_vec_env.py -v
-```
-
-## Конфигурация
-
-Основные параметры обучения находятся в `src/perudo/training/config.py`:
-
-### Параметры игры (GameConfig):
-
-- `num_players`: Максимальное количество игроков (по умолчанию 4, но в эпизодах случайно 3-8)
-- `dice_per_player`: Количество костей на игрока (по умолчанию 5)
-- `total_dice_values`: Количество возможных значений кости (по умолчанию 6)
-- `max_quantity`: Максимальное количество в ставке (по умолчанию 30)
-- `history_length`: Длина истории ставок в observation (по умолчанию 10)
-
-### Параметры обучения (TrainingConfig):
-
-#### PPO параметры:
-
-- `policy`: Тип политики (по умолчанию "MlpPolicy")
-- `policy_kwargs`: Параметры сети (по умолчанию `{"net_arch": [128, 64]}`)
-- `device`: Устройство для обучения (по умолчанию None - автоопределение GPU/CPU)
-- `learning_rate`: Скорость обучения (по умолчанию 1.5e-4)
-- `n_steps`: Количество шагов для сбора данных перед обновлением (по умолчанию 1024)
-- `batch_size`: Размер батча для обучения (по умолчанию 128)
-- `n_epochs`: Количество эпох обновления на одном наборе данных (по умолчанию 6)
-- `gamma`: Коэффициент дисконтирования (по умолчанию 0.95)
-- `gae_lambda`: Параметр GAE (Generalized Advantage Estimation) (по умолчанию 0.95)
-- `clip_range`: Параметр clipping для PPO (по умолчанию 0.15)
-- `ent_coef`: Коэффициент энтропии для исследования (по умолчанию 0.02)
-- `vf_coef`: Коэффициент value function (по умолчанию 0.75)
-- `max_grad_norm`: Максимальная норма градиента для clipping (по умолчанию 0.5)
-
-#### Параметры обучения:
-
-- `total_timesteps`: Общее количество шагов обучения (по умолчанию 10_000_000)
-- `save_freq`: Частота сохранения чекпоинтов (по умолчанию 100_000 шагов)
-- `eval_freq`: Частота оценки модели (по умолчанию 50_000 шагов)
-- `eval_episodes`: Количество эпизодов для оценки (по умолчанию 10)
-
-#### Opponent Pool параметры:
-
-- `max_pool_size`: Максимальный размер пула снапшотов (по умолчанию 20)
-- `min_pool_size`: Минимальный размер пула (по умолчанию 10)
-- `keep_best`: Количество лучших снапшотов для сохранения (по умолчанию 3)
-- `snapshot_freq`: Частота сохранения снапшотов (по умолчанию 50_000 шагов)
-- `elo_k`: K-фактор для обновления ELO (по умолчанию 32)
-
-#### Пути:
-
-- `log_dir`: Директория для логов (по умолчанию "logs")
-- `model_dir`: Директория для моделей (по умолчанию "models")
-- `tb_log_name`: Имя для TensorBoard логов (по умолчанию None, используется "perudo_training")
-
-## Лицензия
+## License
 
 MIT License
-
