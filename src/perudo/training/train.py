@@ -774,8 +774,9 @@ class SelfPlayTraining:
                 self.model.tensorboard_log = os.path.abspath(config.training.log_dir)
                 
                 # Update learning rate schedule for continued training
+                # Proportional to previous schedule: maintain same reduction ratio
                 initial_lr = config.training.learning_rate
-                final_lr = 1e-5
+                final_lr = initial_lr / 20.0  # Maintain same reduction ratio as before
                 lr_schedule = linear_schedule(initial_lr, final_lr)
                 self.model.learning_rate = lr_schedule
                 
@@ -822,9 +823,8 @@ class SelfPlayTraining:
             else:
                 policy_kwargs = config.training.policy_kwargs
             
-            # Create learning rate schedule: linear decay from initial_lr to 1e-5
             initial_lr = config.training.learning_rate
-            final_lr = 1e-5
+            final_lr = initial_lr / 20.0 
             lr_schedule = linear_schedule(initial_lr, final_lr)
             
             self.model = MaskablePPO(
