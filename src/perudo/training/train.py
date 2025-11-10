@@ -282,6 +282,125 @@ class AdvantageNormalizationCallback(BaseCallback):
         return True
 
 
+class AdaptiveEntropyCallback(BaseCallback):
+    """
+    Callback to adaptively adjust entropy coefficient based on entropy loss.
+    
+    Monitors entropy loss and adjusts ent_coef to maintain exploration:
+    - Increases ent_coef when entropy is too low (policy too deterministic)
+    - Decreases ent_coef when entropy is too high (policy too random)
+    """
+    
+    def __init__(
+        self,
+        threshold_low: float = -3.4,
+        threshold_high: float = -3.2,
+        adjustment_rate: float = 0.01,
+        min_ent_coef: float = 0.01,
+        max_ent_coef: float = 0.5,
+        verbose: int = 0,
+    ):
+        """
+        Initialize adaptive entropy callback.
+        
+        Args:
+            threshold_low: Lower threshold - increase ent_coef when entropy < this
+            threshold_high: Upper threshold - decrease ent_coef when entropy > this
+            adjustment_rate: Rate of ent_coef adjustment per update
+            min_ent_coef: Minimum allowed ent_coef value
+            max_ent_coef: Maximum allowed ent_coef value
+            verbose: Verbosity level
+        """
+        super().__init__(verbose)
+        self.threshold_low = threshold_low
+        self.threshold_high = threshold_high
+        self.adjustment_rate = adjustment_rate
+        self.min_ent_coef = min_ent_coef
+        self.max_ent_coef = max_ent_coef
+        self.last_entropy = None
+        self.initial_ent_coef = None
+        self.last_update_step = 0  # Track last step when model was updated
+    
+    def _on_training_start(self) -> None:
+        """Store initial ent_coef value."""
+        if hasattr(self.model, 'ent_coef'):
+            self.initial_ent_coef = self.model.ent_coef
+            if self.verbose > 0:
+                print(f"AdaptiveEntropyCallback initialized with initial ent_coef={self.initial_ent_coef:.4f}")
+                print(f"  Thresholds: low={self.threshold_low:.2f}, high={self.threshold_high:.2f}")
+                print(f"  Adjustment rate: {self.adjustment_rate:.4f}")
+    
+    def _on_rollout_end(self) -> bool:
+        """
+        Called after model update. Adjust ent_coef based on entropy loss.
+        
+        Note: In SB3, this is called after collecting n_steps but before model.update().
+        However, we can access metrics from the previous update through logger.name_to_value
+        after logger.dump() is called (which happens after model.update()).
+        """
+        # Check if model was updated (num_timesteps changed by n_steps)
+        current_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else 0
+        n_steps = getattr(self.model, 'n_steps', 8192)
+        
+        # Only check entropy after model update (when step increased by n_steps)
+        # This avoids checking entropy multiple times between updates
+        if current_step - self.last_update_step >= n_steps:
+            self.last_update_step = current_step
+            
+            # Try to get entropy_loss from logger
+            # In SB3, metrics are available through logger.name_to_value after update
+            if hasattr(self, 'logger') and self.logger is not None:
+                try:
+                    # Get entropy_loss from logger
+                    # Note: logger.name_to_value contains metrics from the last update
+                    entropy_loss = None
+                    if hasattr(self.logger, 'name_to_value'):
+                        entropy_loss = self.logger.name_to_value.get('train/entropy_loss', None)
+                    
+                    # If we have entropy_loss, adjust ent_coef
+                    if entropy_loss is not None:
+                        self.last_entropy = entropy_loss
+                        old_ent_coef = self.model.ent_coef
+                        new_ent_coef = old_ent_coef
+                        
+                        # Adjust based on thresholds
+                        if entropy_loss < self.threshold_low:
+                            # Entropy too low (policy too deterministic) - increase ent_coef
+                            new_ent_coef = min(old_ent_coef + self.adjustment_rate, self.max_ent_coef)
+                            if new_ent_coef != old_ent_coef and self.verbose > 0:
+                                print(f"Entropy too low ({entropy_loss:.4f} < {self.threshold_low:.2f}), "
+                                      f"increasing ent_coef: {old_ent_coef:.4f} -> {new_ent_coef:.4f}")
+                        elif entropy_loss > self.threshold_high:
+                            # Entropy too high (policy too random) - decrease ent_coef
+                            new_ent_coef = max(old_ent_coef - self.adjustment_rate, self.min_ent_coef)
+                            if new_ent_coef != old_ent_coef and self.verbose > 0:
+                                print(f"Entropy too high ({entropy_loss:.4f} > {self.threshold_high:.2f}), "
+                                      f"decreasing ent_coef: {old_ent_coef:.4f} -> {new_ent_coef:.4f}")
+                        
+                        # Update model's ent_coef
+                        if new_ent_coef != old_ent_coef:
+                            self.model.ent_coef = new_ent_coef
+                            
+                            # Log to TensorBoard
+                            if hasattr(self, 'logger') and self.logger is not None:
+                                self.logger.record("custom/ent_coef", new_ent_coef)
+                                self.logger.record("custom/entropy_loss", entropy_loss)
+                                self.logger.record("custom/ent_coef_adjustment", new_ent_coef - old_ent_coef)
+                    
+                except Exception as e:
+                    # Don't crash training if adjustment fails
+                    if self.verbose > 0:
+                        print(f"Warning: Failed to adjust entropy coefficient: {e}")
+        
+        return True
+    
+    def _on_step(self) -> bool:
+        """
+        Dummy method required by BaseCallback. Returns True to fulfill abstract class requirements.
+        """
+        return True
+
+
 class SelfPlayTrainingCallback(BaseCallback):
     """
     Callback for self-play training with opponent pool.
@@ -782,6 +901,19 @@ class SelfPlayTraining:
         # Advantage normalization callback
         adv_norm_callback = AdvantageNormalizationCallback(verbose=self.config.training.verbose)
         callbacks.append(adv_norm_callback)
+        
+        # Adaptive entropy callback (if enabled)
+        if getattr(self.config.training, 'adaptive_entropy', False):
+            adaptive_entropy_callback = AdaptiveEntropyCallback(
+                threshold_low=getattr(self.config.training, 'entropy_threshold_low', -3.4),
+                threshold_high=getattr(self.config.training, 'entropy_threshold_high', -3.2),
+                adjustment_rate=getattr(self.config.training, 'entropy_adjustment_rate', 0.01),
+                verbose=self.config.training.verbose,
+            )
+            callbacks.append(adaptive_entropy_callback)
+            print(f"Adaptive entropy callback enabled:")
+            print(f"  Thresholds: low={adaptive_entropy_callback.threshold_low:.2f}, high={adaptive_entropy_callback.threshold_high:.2f}")
+            print(f"  Adjustment rate: {adaptive_entropy_callback.adjustment_rate:.4f}")
         
         # Self-play callback
         selfplay_callback = SelfPlayTrainingCallback(
