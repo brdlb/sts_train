@@ -57,17 +57,21 @@ def get_device(device: Optional[str] = None) -> str:
     return device
 
 
-def linear_schedule(initial_value: float, final_value: float = 1e-5):
+def linear_schedule(initial_value: float, final_value: Optional[float] = None, decay_ratio: float = 0.3):
     """
-    Linear learning rate schedule.
+    Linear learning rate schedule with slower decay.
     
     Args:
         initial_value: Initial learning rate
-        final_value: Final learning rate (default: 1e-5)
+        final_value: Final learning rate. If None, uses decay_ratio * initial_value
+        decay_ratio: Ratio of final to initial learning rate (default: 0.3, meaning final is 30% of initial)
     
     Returns:
         Callable that takes progress_remaining (1.0 to 0.0) and returns learning rate
     """
+    if final_value is None:
+        final_value = initial_value * decay_ratio
+    
     def func(progress_remaining: float) -> float:
         """
         Calculate learning rate based on training progress.
@@ -774,14 +778,15 @@ class SelfPlayTraining:
                 self.model.tensorboard_log = os.path.abspath(config.training.log_dir)
                 
                 # Update learning rate schedule for continued training
+                # Use slower decay: final LR is 30% of initial (instead of very low 1e-5)
                 initial_lr = config.training.learning_rate
-                final_lr = 1e-5
-                lr_schedule = linear_schedule(initial_lr, final_lr)
+                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.3)
                 self.model.learning_rate = lr_schedule
+                final_lr = initial_lr * 0.3
                 
                 print(f"Successfully loaded model from {latest_model_path}")
                 print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-                print(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay)")
+                print(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
                 
                 # Extract step count from filename if possible
                 match = re.search(r"perudo_model_(\d+)_steps\.zip", os.path.basename(latest_model_path))
@@ -822,10 +827,11 @@ class SelfPlayTraining:
             else:
                 policy_kwargs = config.training.policy_kwargs
             
-            # Create learning rate schedule: linear decay from initial_lr to 1e-5
+            # Create learning rate schedule: linear decay with slower rate
+            # Final LR is 30% of initial (instead of very low 1e-5) for more stable training
             initial_lr = config.training.learning_rate
-            final_lr = 1e-5
-            lr_schedule = linear_schedule(initial_lr, final_lr)
+            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.3)
+            final_lr = initial_lr * 0.3
             
             self.model = MaskablePPO(
                 policy=config.training.policy,
@@ -847,7 +853,7 @@ class SelfPlayTraining:
             )
             
             print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-            print(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay)")
+            print(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
         
         # Update opponent pool with current model
         # VecMonitor forwards attributes, but we also set it on raw env for safety
@@ -905,15 +911,17 @@ class SelfPlayTraining:
         # Adaptive entropy callback (if enabled)
         if getattr(self.config.training, 'adaptive_entropy', False):
             adaptive_entropy_callback = AdaptiveEntropyCallback(
-                threshold_low=getattr(self.config.training, 'entropy_threshold_low', -3.45),
-                threshold_high=getattr(self.config.training, 'entropy_threshold_high', -3.35),
-                adjustment_rate=getattr(self.config.training, 'entropy_adjustment_rate', 0.02),
+                threshold_low=getattr(self.config.training, 'entropy_threshold_low', -3.5),
+                threshold_high=getattr(self.config.training, 'entropy_threshold_high', -3.3),
+                adjustment_rate=getattr(self.config.training, 'entropy_adjustment_rate', 0.008),
+                max_ent_coef=getattr(self.config.training, 'entropy_max_coef', 0.25),
                 verbose=self.config.training.verbose,
             )
             callbacks.append(adaptive_entropy_callback)
             print(f"Adaptive entropy callback enabled:")
             print(f"  Thresholds: low={adaptive_entropy_callback.threshold_low:.2f}, high={adaptive_entropy_callback.threshold_high:.2f}")
             print(f"  Adjustment rate: {adaptive_entropy_callback.adjustment_rate:.4f}")
+            print(f"  Max ent_coef: {adaptive_entropy_callback.max_ent_coef:.4f}")
         
         # Self-play callback
         selfplay_callback = SelfPlayTrainingCallback(

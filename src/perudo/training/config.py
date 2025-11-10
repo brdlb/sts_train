@@ -73,27 +73,28 @@ class RewardConfig:
 class TrainingConfig:
     """Training configuration."""
 
-    # PPO parameters (optimized to prevent win rate collapse)
+    # PPO parameters (optimized to address critical clip_fraction issue)
     policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     opponent_device: Optional[str] = "cpu"  
-    learning_rate: float = 1.2e-4  # Further reduced for stability
+    learning_rate: float = 8.0e-5  # Further reduced for stability
     n_steps: int = 8192
     batch_size: int = 512
-    n_epochs: int = 12  # Increased for better value function learning
+    n_epochs: int = 10  # Reduced to prevent overfitting on batch
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    clip_range: float = 0.03  # Significantly reduced to prevent aggressive updates
-    ent_coef: float = 0.18  # Significantly increased for more exploration
-    vf_coef: float = 4.0  # Further increased to stabilize value function
+    clip_range: float = 0.01  # Critically reduced to address high clip_fraction
+    ent_coef: float = 0.15  # Slightly increased for better exploration
+    vf_coef: float = 6.0  # Further increased to stabilize value function
     max_grad_norm: float = 0.5  # Increased for less aggressive gradient clipping
     
     # Adaptive entropy coefficient parameters
     adaptive_entropy: bool = True  # Enable adaptive entropy coefficient adjustment
-    entropy_threshold_low: float = -3.4  # Lower threshold: increase ent_coef when entropy < this
-    entropy_threshold_high: float = -3.2  # Upper threshold: decrease ent_coef when entropy > this
-    entropy_adjustment_rate: float = 0.01  # Rate of ent_coef adjustment per update  
+    entropy_threshold_low: float = -3.48  # Slightly lower for earlier response
+    entropy_threshold_high: float = -3.32  # Slightly higher for wider range
+    entropy_adjustment_rate: float = 0.008  # Rate of ent_coef adjustment per update (slower)
+    entropy_max_coef: float = 0.25  # Maximum allowed ent_coef value to prevent excessive exploration  
     
     # Transformer parameters (optimized for sequence length 20)
     transformer_features_dim: int = 192  # Reduced from 256 for better efficiency
