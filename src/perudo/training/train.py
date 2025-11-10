@@ -774,9 +774,8 @@ class SelfPlayTraining:
                 self.model.tensorboard_log = os.path.abspath(config.training.log_dir)
                 
                 # Update learning rate schedule for continued training
-                # Proportional to previous schedule: maintain same reduction ratio
                 initial_lr = config.training.learning_rate
-                final_lr = initial_lr / 20.0  # Maintain same reduction ratio as before
+                final_lr = 1e-5
                 lr_schedule = linear_schedule(initial_lr, final_lr)
                 self.model.learning_rate = lr_schedule
                 
@@ -823,8 +822,9 @@ class SelfPlayTraining:
             else:
                 policy_kwargs = config.training.policy_kwargs
             
+            # Create learning rate schedule: linear decay from initial_lr to 1e-5
             initial_lr = config.training.learning_rate
-            final_lr = initial_lr / 20.0 
+            final_lr = 1e-5
             lr_schedule = linear_schedule(initial_lr, final_lr)
             
             self.model = MaskablePPO(
@@ -905,9 +905,9 @@ class SelfPlayTraining:
         # Adaptive entropy callback (if enabled)
         if getattr(self.config.training, 'adaptive_entropy', False):
             adaptive_entropy_callback = AdaptiveEntropyCallback(
-                threshold_low=getattr(self.config.training, 'entropy_threshold_low', -3.4),
-                threshold_high=getattr(self.config.training, 'entropy_threshold_high', -3.2),
-                adjustment_rate=getattr(self.config.training, 'entropy_adjustment_rate', 0.01),
+                threshold_low=getattr(self.config.training, 'entropy_threshold_low', -3.45),
+                threshold_high=getattr(self.config.training, 'entropy_threshold_high', -3.35),
+                adjustment_rate=getattr(self.config.training, 'entropy_adjustment_rate', 0.02),
                 verbose=self.config.training.verbose,
             )
             callbacks.append(adaptive_entropy_callback)

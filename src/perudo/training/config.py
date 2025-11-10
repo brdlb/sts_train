@@ -78,15 +78,15 @@ class TrainingConfig:
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     opponent_device: Optional[str] = "cpu"  
-    learning_rate: float = 1.5e-4  # Further reduced for stability
+    learning_rate: float = 1.2e-4  # Further reduced for stability
     n_steps: int = 8192
     batch_size: int = 512
-    n_epochs: int = 10  # Increased for better value function learning
+    n_epochs: int = 12  # Increased for better value function learning
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    clip_range: float = 0.05  # Significantly reduced to prevent aggressive updates
-    ent_coef: float = 0.15  # Significantly increased for more exploration
-    vf_coef: float = 3.0  # Further increased to stabilize value function
+    clip_range: float = 0.03  # Significantly reduced to prevent aggressive updates
+    ent_coef: float = 0.18  # Significantly increased for more exploration
+    vf_coef: float = 4.0  # Further increased to stabilize value function
     max_grad_norm: float = 0.5  # Increased for less aggressive gradient clipping
     
     # Adaptive entropy coefficient parameters

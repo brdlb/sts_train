@@ -7,11 +7,11 @@ export default defineConfig({
   server: {
     port: 5174,
     allowedHosts: [
-      'funereal-doily-yasmin.ngrok-free.dev',
+      '.ngrok-free.dev',
     ],
     proxy: {
       '/api': {
-        target: 'https://funereal-doily-yasmin.ngrok-free.dev:8000',
+        target: 'http://0.0.0.0:8000',
         changeOrigin: true,
       },
     },
