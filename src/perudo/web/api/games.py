@@ -84,6 +84,11 @@ async def get_game_state(game_id: str):
     if session is None:
         raise HTTPException(status_code=404, detail="Game not found")
 
+    # Sync state from game_state before processing AI turns
+    # This ensures we have the correct current_player
+    session.current_player = session.env.game_state.current_player
+    session.game_over = session.env.game_state.game_over
+
     # Process AI turns if needed
     if not session.game_over and session.current_player != 0:
         session.process_ai_turns()
@@ -115,6 +120,11 @@ async def make_action(game_id: str, request: ActionRequest):
 
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
+
+    # Sync state from game_state after human action
+    # This ensures we have the correct current_player after the action
+    session.current_player = session.env.game_state.current_player
+    session.game_over = session.env.game_state.game_over
 
     # Process AI turns if needed
     if not session.game_over and session.current_player != 0:

@@ -57,6 +57,32 @@ def get_device(device: Optional[str] = None) -> str:
     return device
 
 
+def linear_schedule(initial_value: float, final_value: float = 1e-5):
+    """
+    Linear learning rate schedule.
+    
+    Args:
+        initial_value: Initial learning rate
+        final_value: Final learning rate (default: 1e-5)
+    
+    Returns:
+        Callable that takes progress_remaining (1.0 to 0.0) and returns learning rate
+    """
+    def func(progress_remaining: float) -> float:
+        """
+        Calculate learning rate based on training progress.
+        
+        Args:
+            progress_remaining: Progress from 1.0 (start) to 0.0 (end)
+        
+        Returns:
+            Current learning rate
+        """
+        return final_value + (initial_value - final_value) * progress_remaining
+    
+    return func
+
+
 def find_latest_model(model_dir: str) -> Optional[str]:
     """
     Find the latest saved model in the model directory.
@@ -627,8 +653,16 @@ class SelfPlayTraining:
                 # Enable TensorBoard logging for loaded model
                 # Ensure tensorboard_log is set to absolute path
                 self.model.tensorboard_log = os.path.abspath(config.training.log_dir)
+                
+                # Update learning rate schedule for continued training
+                initial_lr = config.training.learning_rate
+                final_lr = 1e-5
+                lr_schedule = linear_schedule(initial_lr, final_lr)
+                self.model.learning_rate = lr_schedule
+                
                 print(f"Successfully loaded model from {latest_model_path}")
                 print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
+                print(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay)")
                 
                 # Extract step count from filename if possible
                 match = re.search(r"perudo_model_(\d+)_steps\.zip", os.path.basename(latest_model_path))
@@ -669,12 +703,17 @@ class SelfPlayTraining:
             else:
                 policy_kwargs = config.training.policy_kwargs
             
+            # Create learning rate schedule: linear decay from initial_lr to 1e-5
+            initial_lr = config.training.learning_rate
+            final_lr = 1e-5
+            lr_schedule = linear_schedule(initial_lr, final_lr)
+            
             self.model = MaskablePPO(
                 policy=config.training.policy,
                 env=self.vec_env,
                 device=device,
                 policy_kwargs=policy_kwargs,
-                learning_rate=config.training.learning_rate,
+                learning_rate=lr_schedule,  # Use learning rate schedule
                 n_steps=config.training.n_steps,
                 batch_size=config.training.batch_size,
                 n_epochs=config.training.n_epochs,
@@ -689,6 +728,7 @@ class SelfPlayTraining:
             )
             
             print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
+            print(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay)")
         
         # Update opponent pool with current model
         # VecMonitor forwards attributes, but we also set it on raw env for safety
@@ -812,12 +852,6 @@ def main():
         help="Number of parallel environments (tables). If not specified, uses value from config.",
     )
     parser.add_argument(
-        "--total-timesteps",
-        type=int,
-        default=10_000_000,
-        help="Total training steps",
-    )
-    parser.add_argument(
         "--n-steps",
         type=int,
         default=8192,
@@ -846,7 +880,7 @@ def main():
     
     # Create configuration
     config = DEFAULT_CONFIG
-    config.training.total_timesteps = args.total_timesteps
+    # total_timesteps is set only in config.py, not overridden here
     config.training.n_steps = args.n_steps
     config.training.batch_size = args.batch_size
     config.training.device = args.device

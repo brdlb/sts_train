@@ -221,6 +221,11 @@ class GameSession:
         Returns:
             Dictionary with game state (JSON-serializable)
         """
+        # Sync state from game_state before returning
+        # This ensures current_player and game_over are always up-to-date
+        self.current_player = self.env.game_state.current_player
+        self.game_over = self.env.game_state.game_over
+
         game_state = self.env.game_state
         public_info = game_state.get_public_info()
 
@@ -404,8 +409,11 @@ class GameSession:
         )
 
         self.turn_number += 1
+
+        # CRITICAL: Sync current_player and game_over from game_state after action
+        # This ensures we have the correct state after challenge/believe when rounds restart
         self.current_player = self.env.game_state.current_player
-        self.game_over = terminated or truncated
+        self.game_over = self.env.game_state.game_over or terminated or truncated
 
         # Save state to DB
         self._save_state_to_db()
@@ -436,14 +444,77 @@ class GameSession:
         """
         Process all AI turns until it's human's turn or game is over.
 
+        This method follows the same logic as perudo_vec_env.py to ensure
+        turn order is consistent with training.
+
+        Turn order:
+        - Players take turns in cyclic order: 0, 1, 2, 3, 0, 1, 2, 3...
+        - After challenge/believe, the next round starts with the player who lost/gained dice
+        - Players with 0 dice are automatically skipped
+        - The method uses game_state.current_player as the single source of truth
+
         Returns:
             List of actions taken by AI players
         """
         actions_taken = []
 
-        while not self.game_over and self.current_player != 0:
+        # Use game_state.current_player as the single source of truth
+        # Sync self.current_player and self.game_over from game_state
+        self.current_player = self.env.game_state.current_player
+        self.game_over = self.env.game_state.game_over
+
+        # Safety check: validate current_player is within valid range
+        if self.current_player < 0 or self.current_player >= self.env.game_state.num_players:
+            if web_config.debug:
+                print(f"Warning: Invalid current_player {self.current_player}, resetting to 0")
+            self.current_player = 0
+            self.env.game_state.current_player = 0
+
+        max_steps = 100  # Protection against infinite loops
+        step_count = 0
+
+        while not self.game_over and self.current_player != 0 and step_count < max_steps:
+            step_count += 1
+
+            # CRITICAL: Use game_state.current_player as the single source of truth
+            # Always sync from game_state before making decisions
+            self.current_player = self.env.game_state.current_player
+            self.game_over = self.env.game_state.game_over
+
+            # Safety check: validate current_player is within valid range
+            if self.current_player < 0 or self.current_player >= self.env.game_state.num_players:
+                if web_config.debug:
+                    print(f"Warning: Invalid current_player {self.current_player} after sync, breaking")
+                break
+
+            # Check if game ended after sync
+            if self.game_over:
+                break
+
+            # Check if it's human's turn (player 0)
+            if self.current_player == 0:
+                break
+
             ai_player_id = self.current_player
+
+            # CRITICAL: Skip players with no dice - they have already lost and cannot make moves
+            # Players with 0 dice are eliminated and should be automatically skipped
+            # This matches the logic in perudo_vec_env.py
+            if self.env.game_state.player_dice_count[ai_player_id] == 0:
+                # Player has no dice, skip to next player with dice
+                # Use next_player() which automatically skips players with 0 dice
+                self.env.game_state.next_player()
+                self.current_player = self.env.game_state.current_player
+                self.game_over = self.env.game_state.game_over
+                # Check if game ended after skipping players
+                if self.game_over:
+                    break
+                # Continue to next iteration to check next player
+                continue
+
+            # Check if this is an AI player
             if ai_player_id not in self.ai_agents:
+                # Not an AI player (shouldn't happen, but handle gracefully)
                 break
 
             # Get observation for AI player
@@ -504,8 +575,11 @@ class GameSession:
             })
 
             self.turn_number += 1
+
+            # CRITICAL: Sync current_player and game_over from game_state after each action
+            # This ensures we have the correct state after challenge/believe when rounds restart
             self.current_player = self.env.game_state.current_player
-            self.game_over = terminated or truncated
+            self.game_over = self.env.game_state.game_over or terminated or truncated
 
             # Save state to DB
             self._save_state_to_db()
@@ -752,8 +826,13 @@ class GameServer:
 
         self.sessions[game_id] = session
 
+        # Sync state from game_state before processing AI turns
+        # This ensures we have the correct current_player
+        session.current_player = session.env.game_state.current_player
+        session.game_over = session.env.game_state.game_over
+
         # Process initial AI turns if needed
-        if session.current_player != 0:
+        if not session.game_over and session.current_player != 0:
             session.process_ai_turns()
 
         return game_id, session

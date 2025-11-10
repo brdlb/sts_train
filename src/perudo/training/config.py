@@ -73,21 +73,21 @@ class RewardConfig:
 class TrainingConfig:
     """Training configuration."""
 
-    # PPO parameters (optimized for new transformer architecture: 3 layers, 20% fewer params)
+    # PPO parameters (optimized based on training analysis)
     policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     opponent_device: Optional[str] = "cpu"  
-    learning_rate: float = 3.0e-4  
+    learning_rate: float = 2.0e-4  # Reduced for more stable training
     n_steps: int = 8192
     batch_size: int = 512
-    n_epochs: int = 6
+    n_epochs: int = 10  # Increased for better value function learning
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    clip_range: float = 0.2
-    ent_coef: float = 0.06
-    vf_coef: float = 1.0
-    max_grad_norm: float = 0.3  
+    clip_range: float = 0.1  # Reduced to control KL divergence
+    ent_coef: float = 0.08  # Increased for more exploration
+    vf_coef: float = 2.0  # Increased to improve value function
+    max_grad_norm: float = 0.5  # Increased for less aggressive gradient clipping  
     
     # Transformer parameters (optimized for sequence length 20)
     transformer_features_dim: int = 192  # Reduced from 256 for better efficiency
@@ -100,7 +100,7 @@ class TrainingConfig:
 
     # Training parameters
     num_envs: int = 1  # Number of parallel environments (tables)
-    total_timesteps: int = 10_000_000
+    total_timesteps: int = 1_000_000
     save_freq: int = 100_000  # Save model every N steps
     eval_freq: int = 50_000  # Evaluate model every N steps
     eval_episodes: int = 10  # Number of episodes for evaluation

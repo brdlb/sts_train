@@ -5,10 +5,13 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    port: 5174,
+    allowedHosts: [
+      'funereal-doily-yasmin.ngrok-free.dev',
+    ],
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'https://funereal-doily-yasmin.ngrok-free.dev:8000',
         changeOrigin: true,
       },
     },
