@@ -184,9 +184,57 @@ export const gamesApi = {
     return response.data;
   },
 
+  getHistoryByDbId: async (dbGameId: number): Promise<GameHistory> => {
+    const response = await api.get<GameHistory>(`/api/games/db/${dbGameId}/history`);
+    return response.data;
+  },
+
   list: async (filters?: { finished?: boolean; limit?: number }): Promise<any[]> => {
     const response = await api.get('/api/games', { params: filters });
     return response.data;
+  },
+
+  subscribeToAiTurns: (
+    gameId: string,
+    onTurn: (data: {
+      type: string;
+      player_id?: number;
+      action?: any;
+      reward?: number;
+      state?: GameState;
+      game_over?: boolean;
+      winner?: number | null;
+      error?: string;
+    }) => void,
+    onError?: (error: Event) => void
+  ): EventSource => {
+    const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    const eventSource = new EventSource(`${API_BASE_URL}/api/games/${gameId}/ai-turns`);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        onTurn(data);
+        
+        // Close connection when done
+        if (data.type === 'done' || data.type === 'error') {
+          eventSource.close();
+        }
+      } catch (err) {
+        console.error('Error parsing SSE message:', err);
+      }
+    };
+
+    if (onError) {
+      eventSource.onerror = onError;
+    } else {
+      eventSource.onerror = (error) => {
+        console.error('SSE error:', error);
+        eventSource.close();
+      };
+    }
+
+    return eventSource;
   },
 };
 

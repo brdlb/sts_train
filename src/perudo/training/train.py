@@ -326,13 +326,35 @@ class AdaptiveEntropyCallback(BaseCallback):
         self.last_update_step = 0  # Track last step when model was updated
     
     def _on_training_start(self) -> None:
-        """Store initial ent_coef value."""
+        """Store initial ent_coef value and sync with model's current training progress."""
         if hasattr(self.model, 'ent_coef'):
             self.initial_ent_coef = self.model.ent_coef
+        else:
+            self.initial_ent_coef = None
+        
+        # Get current num_timesteps from model to sync last_update_step
+        # This is crucial for continued training - we don't want to reset the tracking
+        if hasattr(self.model, 'num_timesteps'):
+            current_timesteps = self.model.num_timesteps
+            # Set last_update_step to current timesteps to properly track updates
+            # This ensures we don't skip entropy adjustments when continuing training
+            self.last_update_step = current_timesteps
+            
             if self.verbose > 0:
-                print(f"AdaptiveEntropyCallback initialized with initial ent_coef={self.initial_ent_coef:.4f}")
+                ent_coef_str = f"{self.initial_ent_coef:.4f}" if self.initial_ent_coef is not None else "N/A"
+                print(f"AdaptiveEntropyCallback initialized:")
+                print(f"  Current model timesteps: {current_timesteps:,}")
+                print(f"  Initial ent_coef: {ent_coef_str}")
                 print(f"  Thresholds: low={self.threshold_low:.2f}, high={self.threshold_high:.2f}")
                 print(f"  Adjustment rate: {self.adjustment_rate:.4f}")
+                print(f"  Last update step set to: {self.last_update_step:,}")
+        else:
+            if self.verbose > 0:
+                ent_coef_str = f"{self.initial_ent_coef:.4f}" if self.initial_ent_coef is not None else "N/A"
+                print(f"AdaptiveEntropyCallback initialized with initial ent_coef={ent_coef_str}")
+                print(f"  Thresholds: low={self.threshold_low:.2f}, high={self.threshold_high:.2f}")
+                print(f"  Adjustment rate: {self.adjustment_rate:.4f}")
+                print(f"  Warning: Model doesn't have num_timesteps attribute, last_update_step remains at 0")
     
     def _on_rollout_end(self) -> bool:
         """
@@ -348,7 +370,12 @@ class AdaptiveEntropyCallback(BaseCallback):
         
         # Only check entropy after model update (when step increased by n_steps)
         # This avoids checking entropy multiple times between updates
-        if current_step - self.last_update_step >= n_steps:
+        # Note: For continued training, last_update_step is initialized to model's current timesteps
+        # so we check if enough steps have been collected since the last update
+        steps_since_last_update = current_step - self.last_update_step
+        if steps_since_last_update >= n_steps:
+            # Update tracking: set to the step at which we're checking (before the update)
+            # The actual update will happen after this callback, so we track the step before update
             self.last_update_step = current_step
             
             # Try to get entropy_loss from logger
@@ -450,6 +477,17 @@ class SelfPlayTrainingCallback(BaseCallback):
         else:
             self._underlying_env = None
         
+        # Synchronize current_step with model's num_timesteps for continued training
+        # This is crucial to ensure snapshots are saved with correct step numbers
+        if hasattr(self.model, 'num_timesteps'):
+            self.current_step = self.model.num_timesteps
+            if self.verbose > 0:
+                print(f"SelfPlayTrainingCallback: Synchronized current_step with model.num_timesteps = {self.current_step:,}")
+        else:
+            self.current_step = 0
+            if self.verbose > 0:
+                print("SelfPlayTrainingCallback: Model doesn't have num_timesteps, starting from step 0")
+        
         # Verify logger is available
         if not hasattr(self, 'logger') or self.logger is None:
             if self.verbose > 0:
@@ -462,20 +500,29 @@ class SelfPlayTrainingCallback(BaseCallback):
         pass
     
     def _on_step(self) -> bool:
-        self.current_step += 1
+        # Always use model.num_timesteps as the source of truth for step counting
+        # This ensures correct step numbers when continuing training
+        if hasattr(self.model, 'num_timesteps'):
+            # Sync self.current_step with model.num_timesteps
+            # model.num_timesteps is updated after model updates, so it's the authoritative source
+            self.current_step = self.model.num_timesteps
+        else:
+            # Fallback: increment if model doesn't have num_timesteps (shouldn't happen with SB3)
+            self.current_step += 1
         
         # Сохраняем снапшот после обновления модели (если был установлен флаг в _on_rollout_end)
         if self.save_snapshot_every_cycle and self._pending_snapshot:
-            # Get current step from model (num_timesteps) - модель уже обновлена
-            current_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
+            # Always use model.num_timesteps for snapshot step numbers
+            # This ensures snapshots have correct step numbers matching the model's training progress
+            snapshot_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
             self.opponent_pool.save_snapshot(
                 self.model,
-                current_step,
+                snapshot_step,
                 prefix="snapshot",
                 force=True  # Force save regardless of snapshot_freq
             )
             if self.verbose > 0:
-                print(f"Saved snapshot after training cycle {self.training_cycle_count} (step {current_step})")
+                print(f"Saved snapshot after training cycle {self.training_cycle_count} (step {snapshot_step:,})")
             self._pending_snapshot = False
         
         # Собираем episode_info из infos всех env (SB3 их передаёт в self.locals["infos"])
@@ -500,30 +547,36 @@ class SelfPlayTrainingCallback(BaseCallback):
         # Стандартная логика снапшотов по частоте шагов (опционально, для обратной совместимости)
         # Основное сохранение происходит после каждого цикла обучения через _pending_snapshot
         # Эта логика может быть отключена, если save_snapshot_every_cycle=True
-        if not self.save_snapshot_every_cycle and self.current_step % self.snapshot_freq == 0:
-            self.opponent_pool.save_snapshot(
-                self.model,
-                self.current_step,
-                prefix="snapshot"
-            )
-            if self.verbose > 0:
-                pool_stats = self.opponent_pool.get_statistics()
-                print(f"Saved snapshot at step {self.current_step}")
-                print(f"Pool statistics: {pool_stats}")
+        if not self.save_snapshot_every_cycle:
+            # Use model.num_timesteps for step-based snapshot saving
+            step_for_snapshot = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
+            if step_for_snapshot % self.snapshot_freq == 0:
+                self.opponent_pool.save_snapshot(
+                    self.model,
+                    step_for_snapshot,
+                    prefix="snapshot"
+                )
+                if self.verbose > 0:
+                    pool_stats = self.opponent_pool.get_statistics()
+                    print(f"Saved snapshot at step {step_for_snapshot:,}")
+                    print(f"Pool statistics: {pool_stats}")
         
         # Update vec_env with current step for opponent sampling
+        # Use model.num_timesteps as it's the authoritative source for step counting
         # VecMonitor should forward attributes, but we try both wrapped and underlying env
         if self.vec_env is not None:
             try:
+                # Use model.num_timesteps for opponent sampling to ensure correct step progression
+                step_for_sampling = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
                 # Try to set on wrapped env (VecMonitor should forward)
                 if hasattr(self.vec_env, 'current_step'):
-                    self.vec_env.current_step = self.current_step
+                    self.vec_env.current_step = step_for_sampling
                 # Also try underlying env if accessible
                 elif hasattr(self.vec_env, 'envs') and len(self.vec_env.envs) > 0:
                     # VecMonitor wraps the original env
                     underlying = getattr(self.vec_env, 'env', None) or getattr(self.vec_env, 'venv', None)
                     if underlying is not None and hasattr(underlying, 'current_step'):
-                        underlying.current_step = self.current_step
+                        underlying.current_step = step_for_sampling
             except AttributeError:
                 # If setting fails, it's okay - opponent sampling will use default
                 pass
@@ -648,6 +701,8 @@ class SelfPlayTraining:
         self.config = config
         self.num_players = config.game.num_players
         self.num_envs = config.training.num_envs
+        # Track initial timesteps for continued training
+        self.initial_timesteps = 0
         
         # Create directories
         # Ensure paths are absolute for consistency
@@ -788,11 +843,30 @@ class SelfPlayTraining:
                 print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
                 print(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
                 
-                # Extract step count from filename if possible
+                # Get current timesteps from model (SB3 saves this in the model)
+                self.initial_timesteps = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else 0
+                
+                # Extract step count from filename if possible (for verification)
                 match = re.search(r"perudo_model_(\d+)_steps\.zip", os.path.basename(latest_model_path))
                 if match:
-                    loaded_steps = int(match.group(1))
-                    print(f"Model was trained for {loaded_steps} steps. Continuing from step {loaded_steps}.")
+                    filename_steps = int(match.group(1))
+                    print(f"Model filename indicates {filename_steps} steps. Model num_timesteps: {self.initial_timesteps}")
+                    
+                    # If model.num_timesteps doesn't match filename, use filename value
+                    # This can happen if model was saved but num_timesteps wasn't properly saved
+                    if self.initial_timesteps == 0 or abs(self.initial_timesteps - filename_steps) > 1000:
+                        print(f"Warning: Model num_timesteps ({self.initial_timesteps}) doesn't match filename ({filename_steps})")
+                        print(f"Using filename steps ({filename_steps}) as initial_timesteps")
+                        self.initial_timesteps = filename_steps
+                        # Try to set num_timesteps in model if possible (SB3 might not allow this directly)
+                        # We'll rely on the corrected total_timesteps calculation instead
+                else:
+                    print(f"Continuing training from {self.initial_timesteps} steps.")
+                
+                if self.initial_timesteps > 0:
+                    print(f"Training will continue from step {self.initial_timesteps:,}")
+                else:
+                    print(f"Warning: initial_timesteps is 0. Training will start from the beginning.")
             except Exception as e:
                 print(f"Warning: Failed to load model from {latest_model_path}: {e}")
                 print("Creating new model instead...")
@@ -823,6 +897,10 @@ class SelfPlayTraining:
                         max_quantity=config.game.max_quantity,
                         dropout=getattr(config.training, 'transformer_dropout', 0.1),
                     ),
+                    # Enhanced network architectures for policy and value networks
+                    # Value network receives 256-dim features, needs stronger architecture
+                    # Format: list with dict specifying separate architectures for pi and vf
+                    net_arch=[dict(pi=[192, 128], vf=[256, 128])],
                 )
             else:
                 policy_kwargs = config.training.policy_kwargs
@@ -854,6 +932,10 @@ class SelfPlayTraining:
             
             print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
             print(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
+            
+            # For new models, initial_timesteps is 0
+            self.initial_timesteps = 0
+            print(f"Starting new training from step 0")
         
         # Update opponent pool with current model
         # VecMonitor forwards attributes, but we also set it on raw env for safety
@@ -872,7 +954,26 @@ class SelfPlayTraining:
         print(f"Device: {device_str}")
         print(f"Number of environments (tables): {self.num_envs}")
         print(f"Number of players per table: {self.num_players}")
-        print(f"Total timesteps: {self.config.training.total_timesteps}")
+        
+        # Adjust total_timesteps to account for already completed training
+        # If model was loaded with initial_timesteps > 0, we need to train for
+        # initial_timesteps + config.training.total_timesteps to get the correct
+        # progress_remaining calculation for learning rate schedule
+        config_total_timesteps = self.config.training.total_timesteps
+        if self.initial_timesteps > 0:
+            # Calculate total timesteps: train for additional config.training.total_timesteps steps
+            # This ensures progress_remaining is calculated correctly
+            total_timesteps = self.initial_timesteps + config_total_timesteps
+            print(f"Continuing training:")
+            print(f"  Initial timesteps: {self.initial_timesteps:,}")
+            print(f"  Additional timesteps: {config_total_timesteps:,}")
+            print(f"  Total timesteps: {total_timesteps:,}")
+            print(f"  Target progress: {self.initial_timesteps / total_timesteps * 100:.1f}% -> 100%")
+        else:
+            # New training: use config total_timesteps directly
+            total_timesteps = config_total_timesteps
+            print(f"Starting new training:")
+            print(f"  Total timesteps: {total_timesteps:,}")
         
         # Calculate effective buffer size
         # Note: In multi-agent setup, only agent_id=0 is learning, but we collect data from all agents
@@ -942,8 +1043,18 @@ class SelfPlayTraining:
         # Train model
         tb_log_name = self.config.training.tb_log_name or "perudo_training"
         
+        # Verify that model.num_timesteps matches initial_timesteps
+        # If not, we might need to manually set it (though SB3 should handle this)
+        current_model_timesteps = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else 0
+        if self.initial_timesteps > 0 and current_model_timesteps != self.initial_timesteps:
+            print(f"Warning: Model num_timesteps ({current_model_timesteps}) doesn't match initial_timesteps ({self.initial_timesteps})")
+            print(f"SB3 should handle this automatically, but progress calculations might be affected.")
+            # Note: We can't directly set model.num_timesteps in SB3, but the learn() method
+            # should respect the current value. The total_timesteps adjustment above should
+            # ensure progress_remaining is calculated correctly.
+        
         self.model.learn(
-            total_timesteps=self.config.training.total_timesteps,
+            total_timesteps=total_timesteps,
             tb_log_name=tb_log_name,
             callback=callbacks,
             progress_bar=True,  # Enable progress bar for better visibility

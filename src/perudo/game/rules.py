@@ -266,6 +266,9 @@ class PerudoRules:
                     # In special round, value cannot change
                     if game_state.special_round_active and v != prev_value:
                         continue
+                    # In Palifico, player cannot change value
+                    if game_state.palifico_active[player_id] and v != prev_value:
+                        continue
                     if game_state._is_bid_higher(q, v, prev_quantity, prev_value):
                         actions.append(("bid", q, v))
 

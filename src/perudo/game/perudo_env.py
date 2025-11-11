@@ -275,18 +275,6 @@ class PerudoEnv(gym.Env):
             if not action_mask[action]:
                 # Count invalid actions for statistics
                 self.episode_invalid_action_count += 1
-                # Only warn occasionally to avoid spam (every 10th invalid action)
-                if self.episode_invalid_action_count % 10 == 1:
-                    import warnings
-                    warnings.warn(
-                        f"Learning agent (player 0) selected invalid action {action} "
-                        f"(type: {action_type}, params: {param1}, {param2}). "
-                        f"Action mask indicates this action should be masked. "
-                        f"Total invalid actions this episode: {self.episode_invalid_action_count}. "
-                        f"This suggests MaskablePPO may not be properly using action masks. "
-                        f"Invalid actions will be penalized and turn will be passed.",
-                        UserWarning
-                    )
 
         # Execute action
         reward = 0.0

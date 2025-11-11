@@ -28,10 +28,10 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
         observation_space,
         features_dim: int = 256,
         num_layers: int = 2,
-        num_heads: int = 4,
+        num_heads: int = 8,
         embed_dim: int = 128,
         dim_feedforward: int = 512,
-        max_history_length: int = 20,
+        max_history_length: int = 40,
         max_quantity: int = 30,
         dropout: float = 0.1,
     ):
@@ -74,12 +74,17 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
         # Player ID: 0 to max_players-1, so max_players values (0 is also valid, not just padding)
         # Quantity: 0 to max_quantity (inclusive), so max_quantity + 1 values
         # Value: 1 to 6 (dice values), so 7 values (0-6, where 0 is padding)
-        self.player_id_embedding = nn.Embedding(max_players, embed_dim // 3)
-        self.quantity_embedding = nn.Embedding(max_quantity + 1, embed_dim // 3)
-        self.value_embedding = nn.Embedding(7, embed_dim // 3)  # 0-6, where 0 is padding
+        # Distribute embed_dim across three embeddings, ensuring sum equals embed_dim
+        embed_dim_per_feature = embed_dim // 3
+        # Calculate actual concatenated size (may be slightly less than embed_dim due to integer division)
+        concatenated_embed_dim = embed_dim_per_feature * 3
+        self.player_id_embedding = nn.Embedding(max_players, embed_dim_per_feature)
+        self.quantity_embedding = nn.Embedding(max_quantity + 1, embed_dim_per_feature)
+        self.value_embedding = nn.Embedding(7, embed_dim_per_feature)  # 0-6, where 0 is padding
         
         # Projection to combine player_id, quantity and value embeddings
-        self.bid_projection = nn.Linear(embed_dim, embed_dim)
+        # Use actual concatenated dimension as input, project to embed_dim
+        self.bid_projection = nn.Linear(concatenated_embed_dim, embed_dim)
         
         # Layer normalization after embedding (improves training stability)
         self.embed_norm = nn.LayerNorm(embed_dim)

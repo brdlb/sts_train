@@ -10,6 +10,8 @@ import json
 import os
 import re
 import traceback
+import time
+import random
 
 from ..game.perudo_env import PerudoEnv
 from ..agents.rl_agent import RLAgent
@@ -521,6 +523,11 @@ class GameSession:
             obs = self.env.get_observation_for_player(ai_player_id)
             self.env.set_active_player(ai_player_id)
 
+            # Add random delay (1-4 seconds) before bot makes a move
+            # This makes the game feel more natural when playing with humans
+            delay = random.uniform(1.0, 4.0)
+            time.sleep(delay)
+
             # Get action from AI agent
             ai_agent = self.ai_agents[ai_player_id]
             action = ai_agent.act(obs, deterministic=True)
@@ -589,6 +596,155 @@ class GameSession:
                 finish_game(SessionLocal(), self.db_game_id, self.env.game_state.winner)
 
         return actions_taken
+
+    def process_ai_turns_streaming(self):
+        """
+        Process AI turns one by one, yielding each turn result.
+        
+        This is a generator that yields each AI turn separately,
+        allowing the client to receive updates in real-time.
+        
+        Yields:
+            Dictionary with action result and updated game state
+        """
+        # Use game_state.current_player as the single source of truth
+        # Sync self.current_player and self.game_over from game_state
+        self.current_player = self.env.game_state.current_player
+        self.game_over = self.env.game_state.game_over
+
+        # Safety check: validate current_player is within valid range
+        if self.current_player < 0 or self.current_player >= self.env.game_state.num_players:
+            if web_config.debug:
+                print(f"Warning: Invalid current_player {self.current_player}, resetting to 0")
+            self.current_player = 0
+            self.env.game_state.current_player = 0
+
+        max_steps = 100  # Protection against infinite loops
+        step_count = 0
+
+        while not self.game_over and self.current_player != 0 and step_count < max_steps:
+            step_count += 1
+
+            # CRITICAL: Use game_state.current_player as the single source of truth
+            # Always sync from game_state before making decisions
+            self.current_player = self.env.game_state.current_player
+            self.game_over = self.env.game_state.game_over
+
+            # Safety check: validate current_player is within valid range
+            if self.current_player < 0 or self.current_player >= self.env.game_state.num_players:
+                if web_config.debug:
+                    print(f"Warning: Invalid current_player {self.current_player} after sync, breaking")
+                break
+
+            # Check if game ended after sync
+            if self.game_over:
+                break
+
+            # Check if it's human's turn (player 0)
+            if self.current_player == 0:
+                break
+
+            ai_player_id = self.current_player
+
+            # CRITICAL: Skip players with no dice - they have already lost and cannot make moves
+            # Players with 0 dice are eliminated and should be automatically skipped
+            # This matches the logic in perudo_vec_env.py
+            if self.env.game_state.player_dice_count[ai_player_id] == 0:
+                # Player has no dice, skip to next player with dice
+                # Use next_player() which automatically skips players with 0 dice
+                self.env.game_state.next_player()
+                self.current_player = self.env.game_state.current_player
+                self.game_over = self.env.game_state.game_over
+                # Check if game ended after skipping players
+                if self.game_over:
+                    break
+                # Continue to next iteration to check next player
+                continue
+
+            # Check if this is an AI player
+            if ai_player_id not in self.ai_agents:
+                # Not an AI player (shouldn't happen, but handle gracefully)
+                break
+
+            # Get observation for AI player
+            obs = self.env.get_observation_for_player(ai_player_id)
+            self.env.set_active_player(ai_player_id)
+
+            # Add random delay (1-4 seconds) before bot makes a move
+            # This makes the game feel more natural when playing with humans
+            delay = random.uniform(1.0, 4.0)
+            time.sleep(delay)
+
+            # Get action from AI agent
+            ai_agent = self.ai_agents[ai_player_id]
+            action = ai_agent.act(obs, deterministic=True)
+
+            # Execute action
+            obs, reward, terminated, truncated, info = self.env.step(action)
+
+            # Convert action to readable format
+            from ..utils.helpers import action_to_bid
+            action_type, param1, param2 = action_to_bid(action, web_config.max_quantity)
+
+            action_data = {
+                "action_type": action_type,
+                "quantity": param1 if action_type == "bid" else None,
+                "value": param2 if action_type == "bid" else None,
+            }
+
+            # Extract consequences from info
+            consequences = self._extract_consequences(info, ai_player_id, action_type)
+
+            # Add to extended action history
+            self.extended_action_history.append({
+                "player_id": ai_player_id,
+                "action_type": action_type,
+                "action_data": action_data,
+                "consequences": consequences,
+                "turn_number": self.turn_number,
+            })
+
+            # Save action to DB
+            add_action(
+                SessionLocal(),
+                self.db_game_id,
+                ai_player_id,
+                action_type,
+                action_data,
+                self.turn_number,
+            )
+
+            # Serialize reward (may be numpy scalar)
+            if hasattr(reward, "item"):
+                reward_serializable = float(reward.item())
+            elif isinstance(reward, (int, float)):
+                reward_serializable = float(reward)
+            else:
+                reward_serializable = 0.0
+
+            self.turn_number += 1
+
+            # CRITICAL: Sync current_player and game_over from game_state after each action
+            # This ensures we have the correct state after challenge/believe when rounds restart
+            self.current_player = self.env.game_state.current_player
+            self.game_over = self.env.game_state.game_over or terminated or truncated
+
+            # Save state to DB
+            self._save_state_to_db()
+
+            # If game is over, finish it in DB
+            if self.game_over:
+                finish_game(SessionLocal(), self.db_game_id, self.env.game_state.winner)
+
+            # Yield the result for this turn
+            yield {
+                "player_id": ai_player_id,
+                "action": action_data,
+                "reward": reward_serializable,
+                "state": self.get_public_state(),
+                "game_over": self.game_over,
+                "winner": int(self.env.game_state.winner) if self.game_over and self.env.game_state.winner is not None else None,
+            }
 
     def _extract_consequences(self, info: Dict[str, Any], player_id: int, action_type: str) -> Dict[str, Any]:
         """
@@ -826,14 +982,13 @@ class GameServer:
 
         self.sessions[game_id] = session
 
-        # Sync state from game_state before processing AI turns
+        # Sync state from game_state
         # This ensures we have the correct current_player
         session.current_player = session.env.game_state.current_player
         session.game_over = session.env.game_state.game_over
 
-        # Process initial AI turns if needed
-        if not session.game_over and session.current_player != 0:
-            session.process_ai_turns()
+        # Don't process AI turns here - client will subscribe to SSE stream
+        # This allows each bot turn to be sent separately
 
         return game_id, session
 

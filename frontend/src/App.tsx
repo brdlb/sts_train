@@ -27,7 +27,7 @@ function App() {
   };
 
   return (
-    <div>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <nav
         style={{
           backgroundColor: '#333',
@@ -36,6 +36,7 @@ function App() {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
+          flexShrink: 0,
         }}
       >
         <h1 style={{ margin: 0 }}>Perudo Game</h1>
@@ -69,7 +70,7 @@ function App() {
         </div>
       </nav>
 
-      <main style={{ padding: '20px' }}>
+      <main style={{ flex: 1, overflow: 'auto', padding: '20px' }}>
         {currentView === 'select' && <ModelSelector onStart={handleStartGame} />}
         {currentView === 'game' && currentGameId && (
           <GameBoard gameId={currentGameId} onGameEnd={handleGameEnd} />

@@ -57,9 +57,9 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
   const playerNames = ['You (Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
 
   return (
-    <div style={{ padding: '20px', border: '1px solid #ccc', borderRadius: '8px', marginTop: '20px' }}>
+    <div style={{ padding: '20px', border: '1px solid #ccc', borderRadius: '8px', marginTop: '20px', height: '100%', display: 'flex', flexDirection: 'column' }}>
       <h3>История действий</h3>
-      <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         {extendedActionHistory && extendedActionHistory.length > 0 ? (
           <div>
             {extendedActionHistory.map((entry, index) => {

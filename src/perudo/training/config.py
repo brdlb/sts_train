@@ -78,7 +78,7 @@ class TrainingConfig:
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     opponent_device: Optional[str] = "cpu"  
-    learning_rate: float = 8.0e-5  # Further reduced for stability
+    learning_rate: float = 4.0e-5  # Reduced for stability with enhanced critic architecture
     n_steps: int = 8192
     batch_size: int = 512
     n_epochs: int = 10  # Reduced to prevent overfitting on batch
@@ -86,7 +86,7 @@ class TrainingConfig:
     gae_lambda: float = 0.95
     clip_range: float = 0.01  # Critically reduced to address high clip_fraction
     ent_coef: float = 0.15  # Slightly increased for better exploration
-    vf_coef: float = 6.0  # Further increased to stabilize value function
+    vf_coef: float = 0.5  # Standard value; with enhanced critic architecture (vf=[256, 128]), high coefficient can cause overfitting
     max_grad_norm: float = 0.5  # Increased for less aggressive gradient clipping
     
     # Adaptive entropy coefficient parameters
@@ -96,13 +96,13 @@ class TrainingConfig:
     entropy_adjustment_rate: float = 0.008  # Rate of ent_coef adjustment per update (slower)
     entropy_max_coef: float = 0.25  # Maximum allowed ent_coef value to prevent excessive exploration  
     
-    # Transformer parameters (optimized for sequence length 20)
-    transformer_features_dim: int = 192  # Reduced from 256 for better efficiency
+    # Transformer parameters (optimized for sequence length 40)
+    transformer_features_dim: int = 256  # Increased to handle richer feature information
     transformer_num_layers: int = 3  # Increased from 2 for better expressiveness
-    transformer_num_heads: int = 4  # Optimal for embed_dim=96 (96/4=24 per head)
-    transformer_embed_dim: int = 96  # Reduced from 128 (sufficient for seq_len=20)
-    transformer_dim_feedforward: int = 384  # Reduced proportionally (96 * 4 = 384)
-    transformer_history_length: int = 20
+    transformer_num_heads: int = 8  # Increased for better attention analysis (128/8=16 per head)
+    transformer_embed_dim: int = 128  # Increased to provide more "space" for representing each move
+    transformer_dim_feedforward: int = 512  # Standard practice: 128 * 4 = 512
+    transformer_history_length: int = 40  # Increased to cover full game history
     transformer_dropout: float = 0.1  # Explicit dropout parameter
 
     # Training parameters

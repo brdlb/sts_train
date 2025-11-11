@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { statisticsApi, gamesApi, PlayerStatistics, ModelStatistics } from '../services/api';
+import { statisticsApi, gamesApi, PlayerStatistics, ModelStatistics, GameHistory } from '../services/api';
+import { GameHistoryModal } from './GameHistoryModal';
 
 export const Statistics: React.FC = () => {
   const [playerStats, setPlayerStats] = useState<PlayerStatistics | null>(null);
   const [modelStats, setModelStats] = useState<ModelStatistics | null>(null);
   const [games, setGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedHistory, setSelectedHistory] = useState<GameHistory | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   useEffect(() => {
     loadStatistics();
@@ -27,6 +30,23 @@ export const Statistics: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleGameClick = async (dbGameId: number) => {
+    try {
+      setLoadingHistory(true);
+      const history = await gamesApi.getHistoryByDbId(dbGameId);
+      setSelectedHistory(history);
+    } catch (err) {
+      console.error('Failed to load game history:', err);
+      alert('Не удалось загрузить историю игры');
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const handleCloseModal = () => {
+    setSelectedHistory(null);
   };
 
   if (loading) {
@@ -96,11 +116,32 @@ export const Statistics: React.FC = () => {
                 <th style={{ padding: '10px', textAlign: 'left' }}>Finished</th>
                 <th style={{ padding: '10px', textAlign: 'center' }}>Winner</th>
                 <th style={{ padding: '10px', textAlign: 'center' }}>Status</th>
+                <th style={{ padding: '10px', textAlign: 'center' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {games.map((game) => (
-                <tr key={game.id} style={{ borderBottom: '1px solid #eee' }}>
+                <tr
+                  key={game.id}
+                  style={{
+                    borderBottom: '1px solid #eee',
+                    cursor: game.is_finished ? 'pointer' : 'default',
+                    transition: 'background-color 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (game.is_finished) {
+                      e.currentTarget.style.backgroundColor = '#f5f5f5';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = '';
+                  }}
+                  onClick={() => {
+                    if (game.is_finished && !loadingHistory) {
+                      handleGameClick(game.id);
+                    }
+                  }}
+                >
                   <td style={{ padding: '10px' }}>{game.id}</td>
                   <td style={{ padding: '10px' }}>
                     {game.created_at ? new Date(game.created_at).toLocaleString() : '-'}
@@ -114,11 +155,32 @@ export const Statistics: React.FC = () => {
                   <td style={{ padding: '10px', textAlign: 'center' }}>
                     {game.is_finished ? 'Finished' : 'Active'}
                   </td>
+                  <td style={{ padding: '10px', textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={() => handleGameClick(game.id)}
+                      disabled={loadingHistory || !game.is_finished}
+                      style={{
+                        padding: '6px 12px',
+                        backgroundColor: game.is_finished ? '#2196F3' : '#ccc',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: loadingHistory || !game.is_finished ? 'not-allowed' : 'pointer',
+                        opacity: loadingHistory || !game.is_finished ? 0.6 : 1,
+                      }}
+                    >
+                      {loadingHistory ? 'Загрузка...' : 'История'}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {selectedHistory && (
+        <GameHistoryModal history={selectedHistory} onClose={handleCloseModal} />
       )}
     </div>
   );

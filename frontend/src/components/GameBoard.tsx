@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { gamesApi, GameState } from '../services/api';
 import { DiceDisplay } from './DiceDisplay';
 import { BidInput } from './BidInput';
@@ -15,17 +15,25 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     loadGameState();
-    // Poll for game state updates
+    // Poll for game state updates (only when not processing AI turns)
     const interval = setInterval(() => {
-      if (!gameState?.game_over && !processing) {
+      if (!gameState?.game_over && !processing && !eventSourceRef.current) {
         loadGameState();
       }
     }, 2000); // Poll every 2 seconds
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      // Cleanup SSE connection
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
   }, [gameId, gameState?.game_over, processing]);
 
   const loadGameState = async () => {
@@ -37,6 +45,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
       if (state.game_over) {
         onGameEnd();
+      } else if (state.current_player !== 0 && !eventSourceRef.current) {
+        // If it's AI's turn and we're not already subscribed, subscribe to AI turns
+        subscribeToAiTurns();
       }
     } catch (err) {
       setError('Failed to load game state');
@@ -56,11 +67,13 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
       if (result.game_over) {
         onGameEnd();
+      } else {
+        // Subscribe to AI turns stream
+        subscribeToAiTurns();
       }
     } catch (err) {
       setError('Failed to make bid');
       console.error(err);
-    } finally {
       setProcessing(false);
     }
   };
@@ -75,11 +88,13 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
       if (result.game_over) {
         onGameEnd();
+      } else {
+        // Subscribe to AI turns stream
+        subscribeToAiTurns();
       }
     } catch (err) {
       setError('Failed to challenge');
       console.error(err);
-    } finally {
       setProcessing(false);
     }
   };
@@ -94,13 +109,64 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
       if (result.game_over) {
         onGameEnd();
+      } else {
+        // Subscribe to AI turns stream
+        subscribeToAiTurns();
       }
     } catch (err) {
       setError('Failed to call believe');
       console.error(err);
-    } finally {
       setProcessing(false);
     }
+  };
+
+  const subscribeToAiTurns = () => {
+    // Close any existing connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    setProcessing(true);
+    const eventSource = gamesApi.subscribeToAiTurns(
+      gameId,
+      (data) => {
+        if (data.type === 'ai_turn') {
+          // Update game state with each AI turn
+          if (data.state) {
+            setGameState(data.state);
+          }
+
+          // Check if game is over
+          if (data.game_over) {
+            setProcessing(false);
+            eventSourceRef.current = null;
+            if (data.winner !== undefined) {
+              onGameEnd();
+            }
+          }
+        } else if (data.type === 'done') {
+          // All AI turns completed
+          if (data.state) {
+            setGameState(data.state);
+          }
+          setProcessing(false);
+          eventSourceRef.current = null;
+        } else if (data.type === 'error') {
+          setError(`Error: ${data.error || 'Unknown error'}`);
+          setProcessing(false);
+          eventSourceRef.current = null;
+        }
+      },
+      (error) => {
+        console.error('SSE connection error:', error);
+        setError('Connection error while receiving AI turns');
+        setProcessing(false);
+        eventSourceRef.current = null;
+      }
+    );
+
+    eventSourceRef.current = eventSource;
   };
 
   if (loading) {
@@ -134,7 +200,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   const canBelieve = gameState.current_bid !== null && !gameState.believe_called;
 
   return (
-    <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', maxWidth: '1200px', margin: '0 auto', width: '100%' }}>
       <h2>Game {gameId}</h2>
 
       {gameState.game_over && (
@@ -196,11 +262,13 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         </div>
       )}
 
-      <GameHistory 
-        bidHistory={gameState.bid_history} 
-        currentBid={gameState.current_bid}
-        extendedActionHistory={gameState.extended_action_history}
-      />
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <GameHistory 
+          bidHistory={gameState.bid_history} 
+          currentBid={gameState.current_bid}
+          extendedActionHistory={gameState.extended_action_history}
+        />
+      </div>
     </div>
   );
 };

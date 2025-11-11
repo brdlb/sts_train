@@ -3,9 +3,11 @@ API endpoints for game management.
 """
 
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+import json
 
 from ..game_server import GameServer
 from ..database.database import get_db
@@ -89,10 +91,7 @@ async def get_game_state(game_id: str):
     session.current_player = session.env.game_state.current_player
     session.game_over = session.env.game_state.game_over
 
-    # Process AI turns if needed
-    if not session.game_over and session.current_player != 0:
-        session.process_ai_turns()
-
+    # Don't process AI turns here - client will subscribe to SSE stream
     return session.get_public_state()
 
 
@@ -126,15 +125,102 @@ async def make_action(game_id: str, request: ActionRequest):
     session.current_player = session.env.game_state.current_player
     session.game_over = session.env.game_state.game_over
 
-    # Process AI turns if needed
-    if not session.game_over and session.current_player != 0:
-        ai_actions = session.process_ai_turns()
-        result["ai_actions"] = ai_actions
-
+    # Don't process AI turns here - client will subscribe to SSE stream
     # Get updated state
     result["state"] = session.get_public_state()
 
     return result
+
+
+@router.get("/{game_id}/ai-turns")
+async def stream_ai_turns(game_id: str):
+    """
+    Stream AI turns as Server-Sent Events (SSE).
+    
+    This endpoint streams each AI turn separately, allowing the client
+    to receive updates in real-time as bots make their moves.
+    
+    Args:
+        game_id: Game session ID
+        
+    Returns:
+        SSE stream with AI turn updates
+    """
+    if game_server is None:
+        raise HTTPException(status_code=500, detail="Game server not initialized")
+
+    session = game_server.get_game(game_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    def generate():
+        """Generator function for SSE stream."""
+        try:
+            # Sync state before processing
+            session.current_player = session.env.game_state.current_player
+            session.game_over = session.env.game_state.game_over
+
+            # Only process if it's not human's turn and game is not over
+            if session.game_over or session.current_player == 0:
+                # Send final state
+                yield f"data: {json.dumps({'type': 'done', 'state': session.get_public_state()})}\n\n"
+                return
+
+            # Process AI turns and stream each one
+            for turn_result in session.process_ai_turns_streaming():
+                # Format as SSE event
+                data = json.dumps({
+                    "type": "ai_turn",
+                    "player_id": turn_result["player_id"],
+                    "action": turn_result["action"],
+                    "reward": turn_result["reward"],
+                    "state": turn_result["state"],
+                    "game_over": turn_result["game_over"],
+                    "winner": turn_result.get("winner"),
+                })
+                yield f"data: {data}\n\n"
+
+            # Send final state when done
+            yield f"data: {json.dumps({'type': 'done', 'state': session.get_public_state()})}\n\n"
+        except Exception as e:
+            # Send error event
+            error_data = json.dumps({
+                "type": "error",
+                "error": str(e),
+            })
+            yield f"data: {error_data}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable buffering in nginx
+        },
+    )
+
+
+@router.get("/db/{db_game_id}/history")
+async def get_game_history_by_db_id(db_game_id: int, db: Session = Depends(get_db)):
+    """
+    Get game history from database by database game ID.
+
+    Args:
+        db_game_id: Database game ID
+        db: Database session
+
+    Returns:
+        Game history
+    """
+    from ..database.operations import get_game
+    
+    game = get_game(db, db_game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    history = get_game_history(db, db_game_id)
+    return history
 
 
 @router.get("/{game_id}/history")
