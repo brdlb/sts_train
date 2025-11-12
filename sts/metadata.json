@@ -1,0 +1,5 @@
+{
+  "name": "Secret Tea Society - Bot Logic",
+  "description": "A web-based implementation of the classic dice game Perudo (Liar's Dice). Play against AI bots, each with a unique personality powered by Gemini, and test your skills of bluffing and deduction.",
+  "requestFramePermissions": []
+}
