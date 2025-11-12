@@ -1,85 +1,57 @@
-import React, { useState } from 'react';
-import { ModelSelector } from './components/ModelSelector';
+import React, { useState, useEffect } from 'react';
 import { GameBoard } from './components/GameBoard';
-import { Statistics } from './components/Statistics';
-import { gamesApi } from './services/api';
-
-type View = 'select' | 'game' | 'statistics';
+import { gamesApi, GameState } from './services/api';
 
 function App() {
-  const [currentView, setCurrentView] = useState<View>('select');
   const [currentGameId, setCurrentGameId] = useState<string | null>(null);
+  const [initialGameState, setInitialGameState] = useState<GameState | null>(null);
 
-  const handleStartGame = async (modelPaths: string[]) => {
-    try {
-      const result = await gamesApi.create({ model_paths: modelPaths });
-      setCurrentGameId(result.game_id);
-      setCurrentView('game');
-    } catch (error) {
-      console.error('Failed to start game:', error);
-      alert('Failed to start game. Please try again.');
-    }
-  };
+  useEffect(() => {
+    const startGame = async () => {
+      try {
+        const result = await gamesApi.create({ model_paths: [] });
+        setCurrentGameId(result.game_id);
+        setInitialGameState(result.state);
+      } catch (error) {
+        console.error('Failed to start game automatically:', error);
+        alert('Failed to start game. Please check the console and try again.');
+      }
+    };
+
+    startGame();
+  }, []);
 
   const handleGameEnd = () => {
-    setCurrentView('select');
+    console.log("Game ended");
     setCurrentGameId(null);
+    setInitialGameState(null);
   };
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <nav
-        style={{
-          backgroundColor: '#333',
-          color: 'white',
-          padding: '15px 20px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexShrink: 0,
-        }}
-      >
-        <h1 style={{ margin: 0 }}>Perudo Game</h1>
-        <div style={{ display: 'flex', gap: '15px' }}>
-          <button
-            onClick={() => setCurrentView('select')}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: currentView === 'select' ? '#4CAF50' : '#555',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: 'pointer',
-            }}
-          >
-            New Game
-          </button>
-          <button
-            onClick={() => setCurrentView('statistics')}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: currentView === 'statistics' ? '#4CAF50' : '#555',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: 'pointer',
-            }}
-          >
-            Statistics
-          </button>
-        </div>
-      </nav>
+    <div className="bg-gray-800 min-h-screen text-white p-4 sm:p-6 lg:p-8 flex flex-col items-center font-sans">
+      <div className="w-full max-w-7xl text-center mb-6 z-10 relative">
+        <h1 className="text-5xl font-bold text-orange-400 mb-2">Secret Tea Society 🍵</h1>
+        <p className="text-gray-400 text-lg">The last player with dice wins!</p>
+      </div>
 
-      <main style={{ flex: 1, overflow: 'auto', padding: '20px' }}>
-        {currentView === 'select' && <ModelSelector onStart={handleStartGame} />}
-        {currentView === 'game' && currentGameId && (
-          <GameBoard gameId={currentGameId} onGameEnd={handleGameEnd} />
+      <main className="w-full max-w-7xl">
+        {currentGameId && initialGameState ? (
+          <GameBoard
+            gameId={currentGameId}
+            initialState={initialGameState}
+            onGameEnd={handleGameEnd}
+          />
+        ) : (
+          <div className="text-center">
+            <div className="flex items-center justify-center space-x-3">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-300"></div>
+              <span className="text-2xl font-semibold text-gray-300">Loading Game...</span>
+            </div>
+          </div>
         )}
-        {currentView === 'statistics' && <Statistics />}
       </main>
     </div>
   );
 }
 
 export default App;
-
