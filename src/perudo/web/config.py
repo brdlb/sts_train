@@ -24,18 +24,11 @@ class WebConfig:
 
         # Server settings
         self.host: str = os.getenv("WEB_HOST", "0.0.0.0")
-        self.port: int = int(os.getenv("WEB_PORT", "8000"))
+        self.port: int = int(os.getenv("WEB_PORT", "5565"))
         self.debug: bool = os.getenv("WEB_DEBUG", "false").lower() == "true"
 
         # CORS settings
-        self.cors_origins: list = [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-        ]
-        
-        # CORS regex pattern for port ranges
-        # Allows ports 5100-5199 (e.g., 5173, 5174, etc.) for development servers
-        self.cors_origin_regex: str = r"http://(localhost|127\.0\.0\.1):51\d{2}"
+        self.cors_origins: list = ["*"]
 
         # Database settings
         db_dir = os.path.join(os.getcwd(), "data")

@@ -60,3 +60,6 @@ yarn-error.log*
 Thumbs.db
 
 data/
+caddy.exe
+Caddyfile
+data/perudo_games.db

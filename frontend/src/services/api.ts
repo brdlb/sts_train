@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -141,17 +141,17 @@ export interface ModelStatistics {
 // API functions
 export const modelsApi = {
   list: async (): Promise<ModelInfo[]> => {
-    const response = await api.get<ModelInfo[]>('/api/models/list');
+    const response = await api.get<ModelInfo[]>('/models/list');
     return response.data;
   },
 
   getInfo: async (modelId: string): Promise<ModelInfo> => {
-    const response = await api.get<ModelInfo>(`/api/models/${modelId}/info`);
+    const response = await api.get<ModelInfo>(`/models/${modelId}/info`);
     return response.data;
   },
 
   validate: async (modelPath: string): Promise<{ valid: boolean; path: string }> => {
-    const response = await api.post('/api/models/validate', null, {
+    const response = await api.post('/models/validate', null, {
       params: { model_path: modelPath },
     });
     return response.data;
@@ -161,36 +161,36 @@ export const modelsApi = {
 export const gamesApi = {
   create: async (request: CreateGameRequest): Promise<{ game_id: string; state: GameState }> => {
     const response = await api.post<{ game_id: string; state: GameState }>(
-      '/api/games/create',
+      '/games/create',
       request
     );
     return response.data;
   },
 
   getState: async (gameId: string): Promise<GameState> => {
-    const response = await api.get<GameState>(`/api/games/${gameId}`);
+    const response = await api.get<GameState>(`/games/${gameId}`);
     return response.data;
   },
 
   makeAction: async (gameId: string, action: number): Promise<ActionResult> => {
-    const response = await api.post<ActionResult>(`/api/games/${gameId}/action`, {
+    const response = await api.post<ActionResult>(`/games/${gameId}/action`, {
       action,
     });
     return response.data;
   },
 
   getHistory: async (gameId: string): Promise<GameHistory> => {
-    const response = await api.get<GameHistory>(`/api/games/${gameId}/history`);
+    const response = await api.get<GameHistory>(`/games/${gameId}/history`);
     return response.data;
   },
 
   getHistoryByDbId: async (dbGameId: number): Promise<GameHistory> => {
-    const response = await api.get<GameHistory>(`/api/games/db/${dbGameId}/history`);
+    const response = await api.get<GameHistory>(`/games/db/${dbGameId}/history`);
     return response.data;
   },
 
   list: async (filters?: { finished?: boolean; limit?: number }): Promise<any[]> => {
-    const response = await api.get('/api/games', { params: filters });
+    const response = await api.get('/games', { params: filters });
     return response.data;
   },
 
@@ -208,8 +208,8 @@ export const gamesApi = {
     }) => void,
     onError?: (error: Event) => void
   ): EventSource => {
-    const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-    const eventSource = new EventSource(`${API_BASE_URL}/api/games/${gameId}/ai-turns`);
+    const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+    const eventSource = new EventSource(`${API_BASE_URL}/games/${gameId}/ai-turns`);
 
     eventSource.onmessage = (event) => {
       try {
@@ -244,17 +244,17 @@ export const statisticsApi = {
     finished_games: number;
     active_games: number;
   }> => {
-    const response = await api.get('/api/statistics/games');
+    const response = await api.get('/statistics/games');
     return response.data;
   },
 
   getPlayer: async (): Promise<PlayerStatistics> => {
-    const response = await api.get<PlayerStatistics>('/api/statistics/player');
+    const response = await api.get<PlayerStatistics>('/statistics/player');
     return response.data;
   },
 
   getModels: async (): Promise<ModelStatistics> => {
-    const response = await api.get<ModelStatistics>('/api/statistics/models');
+    const response = await api.get<ModelStatistics>('/statistics/models');
     return response.data;
   },
 };

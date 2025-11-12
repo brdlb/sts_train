@@ -449,11 +449,6 @@ class GameSession:
         This method follows the same logic as perudo_vec_env.py to ensure
         turn order is consistent with training.
 
-        Turn order:
-        - Players take turns in cyclic order: 0, 1, 2, 3, 0, 1, 2, 3...
-        - After challenge/believe, the next round starts with the player who lost/gained dice
-        - Players with 0 dice are automatically skipped
-        - The method uses game_state.current_player as the single source of truth
 
         Returns:
             List of actions taken by AI players

@@ -6,15 +6,6 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5174,
-    allowedHosts: [
-      '',
-    ],
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-      },
-    },
-  },
+    allowedHosts: ['perudo.brdlb.com']
+  }
 })
-
