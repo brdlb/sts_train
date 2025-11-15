@@ -58,7 +58,8 @@ class GameState:
         self.player_dice = []
         self.current_bid = None
         self.bid_history = []
-        self.current_player = 0
+        # Randomly select starting player from all available players
+        self.current_player = np.random.randint(0, self.num_players)
         self.player_dice_count = [self.dice_per_player] * self.num_players
         self.palifico_active = [False] * self.num_players
         self.special_round_active = False
