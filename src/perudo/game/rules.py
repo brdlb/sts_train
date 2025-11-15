@@ -42,6 +42,11 @@ class PerudoRules:
         if game_state.player_dice_count[player_id] == 0:
             return False, "Player already out of game"
 
+        # Check that quantity doesn't exceed total dice in game
+        total_dice_in_game = sum(game_state.player_dice_count)
+        if quantity > total_dice_in_game:
+            return False, f"Quantity ({quantity}) cannot exceed total dice in game ({total_dice_in_game})"
+
         # First bid in round cannot be value 1 (since 1s are jokers and counted as any number)
         # Exception: in special round, first bid can be value 1 (but 1s are NOT jokers in special round)
         if game_state.current_bid is None:
@@ -240,6 +245,9 @@ class PerudoRules:
             actions.append(("believe", None, None))
 
         # Actions: bids
+        # Calculate total dice in game to limit bid quantities
+        total_dice_in_game = sum(game_state.player_dice_count)
+        
         # Generate possible bids
         if game_state.current_bid is None:
             if game_state.special_round_active:
@@ -248,20 +256,20 @@ class PerudoRules:
                     actions.append(("bid", 1, v))
             else:
                 # First bid - can be any except value 1
-                # No upper limit on quantity - can bid any amount above minimum
+                # Quantity cannot exceed total dice in game
                 min_quantity = 1
-                max_reasonable = 100  # Reasonable upper limit for action space, but no game logic limit
-                for q in range(min_quantity, max_reasonable + 1):
+                max_quantity = min(100, total_dice_in_game)  # Limit by total dice in game
+                for q in range(min_quantity, max_quantity + 1):
                     for v in range(2, game_state.total_dice_values + 1):  # Skip value 1 for first bid
                         actions.append(("bid", q, v))
         else:
             # Subsequent bids must be higher
-            # No upper limit on quantity - can bid any amount above minimum required
+            # Quantity cannot exceed total dice in game
             prev_quantity, prev_value = game_state.current_bid
             # Start from minimum possible quantity (1) and let _is_bid_higher filter valid bids
-            # This allows any quantity that satisfies the "higher bid" rule
-            max_reasonable = 100  # Reasonable upper limit for action space, but no game logic limit
-            for q in range(1, max_reasonable + 1):
+            # Limit maximum quantity by total dice in game
+            max_quantity = min(100, total_dice_in_game)  # Limit by total dice in game
+            for q in range(1, max_quantity + 1):
                 for v in range(1, game_state.total_dice_values + 1):
                     # In special round, value cannot change
                     if game_state.special_round_active and v != prev_value:

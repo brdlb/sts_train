@@ -73,21 +73,21 @@ class RewardConfig:
 class TrainingConfig:
     """Training configuration."""
 
-    # PPO parameters (optimized to address critical clip_fraction issue)
+    # PPO parameters (optimized for Transformer + PPO architecture)
     policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     opponent_device: Optional[str] = "cpu"  
-    learning_rate: float = 4.0e-5  # Reduced for stability with enhanced critic architecture
+    learning_rate: float = 1.5e-4  # Optimized for Transformer: conservative increase from 4e-5 for better learning speed
     n_steps: int = 8192
-    batch_size: int = 512
-    n_epochs: int = 10  # Reduced to prevent overfitting on batch
+    batch_size: int = 1024  # Increased for Transformer stability: larger batches improve attention mechanism gradients
+    n_epochs: int = 12  # Increased for better data utilization with Transformer architecture
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    clip_range: float = 0.01  # Critically reduced to address high clip_fraction
-    ent_coef: float = 0.15  # Slightly increased for better exploration
+    clip_range: float = 0.15  # Increased from 0.01 to address high clip_fraction (0.6-0.7); conservative for Transformer stability
+    ent_coef: float = 0.12  # Slightly reduced as entropy is already at good level (-3.5)
     vf_coef: float = 0.5  # Standard value; with enhanced critic architecture (vf=[256, 128]), high coefficient can cause overfitting
-    max_grad_norm: float = 0.5  # Increased for less aggressive gradient clipping
+    max_grad_norm: float = 0.5  # Critical for Transformer stability: prevents exploding gradients
     
     # Adaptive entropy coefficient parameters
     adaptive_entropy: bool = True  # Enable adaptive entropy coefficient adjustment

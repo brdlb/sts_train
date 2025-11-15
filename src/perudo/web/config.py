@@ -23,7 +23,7 @@ class WebConfig:
         )
 
         # Server settings
-        self.host: str = os.getenv("WEB_HOST", "0.0.0.0")
+        self.host: str = os.getenv("WEB_HOST", "127.0.0.1")
         self.port: int = int(os.getenv("WEB_PORT", "5565"))
         self.debug: bool = os.getenv("WEB_DEBUG", "false").lower() == "true"
 

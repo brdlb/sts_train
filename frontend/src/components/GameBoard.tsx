@@ -389,71 +389,74 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         </div>
       )}
 
-      <div className="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-2 lg:gap-8 lg:items-end z-10">
-        {/* Player List Column */}
-        <div className="w-full flex flex-col justify-start space-y-4">
-          {displayPlayers.map((playerId) => (
-            <Player
-              ref={el => { playerRefs.current[playerId] = el; }}
-              key={playerId}
-              playerId={playerId}
-              playerName={PLAYER_NAMES[playerId] || `Player ${playerId}`}
-              dice={playerId === 0 ? playerDice : []}
-              diceCount={gameState.player_dice_count[playerId]}
-              isCurrent={gameState.current_player === playerId}
-              isHuman={playerId === 0}
-              gamePhase={gamePhase}
-              lastBid={gameState.current_bid}
-              isLastBidder={lastBidderId === playerId}
-              bidHistory={gameState.bid_history}
-              revealed={gamePhase === 'reveal' || gamePhase === 'round_over'}
-            />
-          ))}
-        </div>
-
-        {/* Controls Column */}
-        <div className="w-full space-y-4 flex flex-col">
-          {processing && gameState.current_player !== 0 && (
-            <div className="bg-gray-700/50 p-4 rounded-lg flex items-center justify-center space-x-3 w-full max-w-lg mx-auto">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-300"></div>
-              <span className="text-xl font-semibold text-yellow-300">
-                {PLAYER_NAMES[gameState.current_player] || `Player ${gameState.current_player}`} is thinking...
-              </span>
-            </div>
-          )}
-          
-          <div ref={bidControlsRef} className="w-full flex justify-center">
-            {gameState.current_player === 0 && !gameState.game_over && gamePhase === 'bidding' && (
-              <BidControls
-                currentBid={gameState.current_bid}
-                maxQuantity={30}
-                onBid={handleBid}
-                onChallenge={handleChallenge}
-                onBelieve={handleBelieve}
-                canChallenge={canChallenge}
-                canBelieve={canBelieve}
-                disabled={processing}
-                totalDiceInPlay={totalDiceInPlay}
-                playerDiceCount={gameState.player_dice_count[0]}
+      <div className="w-full max-w-7xl z-10">
+        <div className="grid grid-cols-1 lg:grid-cols-2 lg:gap-8 lg:items-end mb-6">
+          {/* Player List Column */}
+          <div className="w-full flex flex-col justify-start space-y-4">
+            {displayPlayers.map((playerId) => (
+              <Player
+                ref={el => { playerRefs.current[playerId] = el; }}
+                key={playerId}
+                playerId={playerId}
+                playerName={PLAYER_NAMES[playerId] || `Player ${playerId}`}
+                dice={playerId === 0 ? playerDice : []}
+                diceCount={gameState.player_dice_count[playerId]}
+                isCurrent={gameState.current_player === playerId}
+                isHuman={playerId === 0}
+                gamePhase={gamePhase}
+                lastBid={gameState.current_bid}
+                isLastBidder={lastBidderId === playerId}
+                bidHistory={gameState.bid_history}
+                revealed={gamePhase === 'reveal' || gamePhase === 'round_over'}
               />
+            ))}
+          </div>
+
+          {/* Controls Column */}
+          <div className="w-full space-y-4 flex flex-col">
+            {processing && gameState.current_player !== 0 && (
+              <div className="bg-gray-700/50 p-4 rounded-lg flex items-center justify-center space-x-3 w-full max-w-lg mx-auto">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-300"></div>
+                <span className="text-xl font-semibold text-yellow-300">
+                  {PLAYER_NAMES[gameState.current_player] || `Player ${gameState.current_player}`} is thinking...
+                </span>
+              </div>
+            )}
+            
+            <div ref={bidControlsRef} className="w-full flex justify-center">
+              {gameState.current_player === 0 && !gameState.game_over && gamePhase === 'bidding' && (
+                <BidControls
+                  currentBid={gameState.current_bid}
+                  maxQuantity={30}
+                  onBid={handleBid}
+                  onChallenge={handleChallenge}
+                  onBelieve={handleBelieve}
+                  canChallenge={canChallenge}
+                  canBelieve={canBelieve}
+                  disabled={processing}
+                  totalDiceInPlay={totalDiceInPlay}
+                  playerDiceCount={gameState.player_dice_count[0]}
+                />
+              )}
+            </div>
+
+            {gameState.current_player !== 0 && !gameState.game_over && gamePhase === 'bidding' && (
+              <div className="bg-yellow-500/20 p-4 rounded-lg text-center">
+                <p className="text-lg text-yellow-300">
+                  Waiting for {PLAYER_NAMES[gameState.current_player] || `Player ${gameState.current_player}`} to make a move...
+                </p>
+              </div>
             )}
           </div>
+        </div>
 
-          {gameState.current_player !== 0 && !gameState.game_over && gamePhase === 'bidding' && (
-            <div className="bg-yellow-500/20 p-4 rounded-lg text-center">
-              <p className="text-lg text-yellow-300">
-                Waiting for {PLAYER_NAMES[gameState.current_player] || `Player ${gameState.current_player}`} to make a move...
-              </p>
-            </div>
-          )}
-
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <GameHistory
-              bidHistory={gameState.bid_history}
-              currentBid={gameState.current_bid}
-              extendedActionHistory={gameState.extended_action_history}
-            />
-          </div>
+        {/* History - Full Width */}
+        <div className="w-full">
+          <GameHistory
+            bidHistory={gameState.bid_history}
+            currentBid={gameState.current_bid}
+            extendedActionHistory={gameState.extended_action_history}
+          />
         </div>
       </div>
 

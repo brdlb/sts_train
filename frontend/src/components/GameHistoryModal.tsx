@@ -169,7 +169,7 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
             <div style={{ color: '#666', fontStyle: 'italic' }}>Нет ходов</div>
           ) : (
             <div>
-              {actions.map((action, index) => {
+              {actions.slice().reverse().map((action, index) => {
                 const actionInfo = formatActionDescription(action, players);
                 const isHuman = action.player_id === 0;
                 const backgroundColor = isHuman

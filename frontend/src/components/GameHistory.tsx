@@ -64,12 +64,12 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
   const playerNames = ['You (Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
 
   return (
-    <div className="w-full h-full bg-gray-900/80 rounded-lg p-4 shadow-lg flex flex-col border border-gray-700">
+    <div className="w-full bg-gray-900/80 rounded-lg p-4 shadow-lg flex flex-col border border-gray-700" style={{ maxHeight: '400px' }}>
       <h3 className="text-xl font-semibold text-yellow-300 border-b border-yellow-300/30 pb-2 mb-2 flex-shrink-0">Action History</h3>
-      <div className="flex-grow overflow-y-auto pr-2">
+      <div className="flex-grow overflow-y-auto pr-2 min-h-0">
         {extendedActionHistory && extendedActionHistory.length > 0 ? (
           <div className="space-y-2">
-            {extendedActionHistory.filter(entry => entry && entry.consequences).map((entry, index) => {
+            {extendedActionHistory.filter(entry => entry && entry.consequences).slice().reverse().map((entry, index) => {
               // Validate entry
               if (!entry || !entry.consequences) {
                 return null;
@@ -122,7 +122,7 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
             {bidHistory.length === 0 && !currentBid && (
               <div className="text-gray-400 italic">No actions yet</div>
             )}
-            {bidHistory.map((bid, index) => {
+            {bidHistory.slice().reverse().map((bid, index) => {
               const [playerId, quantity, value] = bid;
               return (
                 <div

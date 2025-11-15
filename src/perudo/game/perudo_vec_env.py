@@ -167,6 +167,9 @@ class PerudoMultiAgentVecEnv(VecEnv):
 
         # Store last observations for action_masks() method (required by MaskablePPO)
         self.last_obs: Optional[Dict[str, np.ndarray]] = None
+        
+        # Debug mode flag (will be set from training script)
+        self.debug_mode = None
 
         # Get observation and action spaces from first environment
         obs_space = self.envs[0].observation_space
@@ -285,6 +288,32 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         
                         env.set_active_player(self.active_agent_ids[i])
                         obs_for_opp, _, terminated, opp_truncated, opp_info = env.step(action)
+                        
+                        # Debug mode: print opponent's move during reset
+                        if self.debug_mode is not None and self.debug_mode.is_set():
+                            try:
+                                from ..utils.helpers import action_to_bid
+                                action_type, param1, param2 = action_to_bid(action, env.max_quantity)
+                                
+                                player_name = f"Player {self.active_agent_ids[i]}"
+                                if action_type == "bid":
+                                    move_str = f"{player_name}: BID {param1}x{param2}"
+                                elif action_type == "challenge":
+                                    move_str = f"{player_name}: CHALLENGE"
+                                elif action_type == "believe":
+                                    move_str = f"{player_name}: BELIEVE"
+                                else:
+                                    move_str = f"{player_name}: {action_type}"
+                                
+                                # Show current game state
+                                current_bid = env.game_state.current_bid
+                                bid_str = f"{current_bid[0]}x{current_bid[1]}" if current_bid else "none"
+                                dice_str = str(list(env.game_state.player_dice_count))
+                                
+                                print(f"[DEBUG] {move_str} | Current bid: {bid_str} | Dice: {dice_str}")
+                            except Exception:
+                                # Silently ignore errors to prevent crashes
+                                pass
                         
                         if terminated or opp_truncated:
                             # Если игра завершилась до хода learning agent, эпизод будет обработан
@@ -606,6 +635,32 @@ class PerudoMultiAgentVecEnv(VecEnv):
                                 env.set_active_player(self.active_agent_ids[i])
                                 obs_for_opp, _, terminated, opp_truncated, opp_info = env.step(action)
                                 
+                                # Debug mode: print opponent's move during episode reset
+                                if self.debug_mode is not None and self.debug_mode.is_set():
+                                    try:
+                                        from ..utils.helpers import action_to_bid
+                                        action_type, param1, param2 = action_to_bid(action, env.max_quantity)
+                                        
+                                        player_name = f"Player {self.active_agent_ids[i]}"
+                                        if action_type == "bid":
+                                            move_str = f"{player_name}: BID {param1}x{param2}"
+                                        elif action_type == "challenge":
+                                            move_str = f"{player_name}: CHALLENGE"
+                                        elif action_type == "believe":
+                                            move_str = f"{player_name}: BELIEVE"
+                                        else:
+                                            move_str = f"{player_name}: {action_type}"
+                                        
+                                        # Show current game state
+                                        current_bid = env.game_state.current_bid
+                                        bid_str = f"{current_bid[0]}x{current_bid[1]}" if current_bid else "none"
+                                        dice_str = str(list(env.game_state.player_dice_count))
+                                        
+                                        print(f"[DEBUG] {move_str} | Current bid: {bid_str} | Dice: {dice_str}")
+                                    except Exception:
+                                        # Silently ignore errors to prevent crashes
+                                        pass
+                                
                                 if terminated or opp_truncated:
                                     # If game ended before learning agent's turn, reset again
                                     obs, info = env.reset()
@@ -791,6 +846,32 @@ class PerudoMultiAgentVecEnv(VecEnv):
             # Get action validity from info to only count valid actions in episode_length
             action_valid = info.get("action_info", {}).get("action_valid", True)
             
+            # Debug mode: print every move
+            if self.debug_mode is not None and self.debug_mode.is_set():
+                try:
+                    from ..utils.helpers import action_to_bid
+                    action_type, param1, param2 = action_to_bid(action, env.max_quantity)
+                    
+                    player_name = f"Player {current_learning_agent}" if all_learn else "Learning Agent"
+                    if action_type == "bid":
+                        move_str = f"{player_name}: BID {param1}x{param2}"
+                    elif action_type == "challenge":
+                        move_str = f"{player_name}: CHALLENGE"
+                    elif action_type == "believe":
+                        move_str = f"{player_name}: BELIEVE"
+                    else:
+                        move_str = f"{player_name}: {action_type}"
+                    
+                    # Show current game state
+                    current_bid = env.game_state.current_bid
+                    bid_str = f"{current_bid[0]}x{current_bid[1]}" if current_bid else "none"
+                    dice_str = str(list(env.game_state.player_dice_count))
+                    
+                    print(f"[DEBUG] {move_str} | Current bid: {bid_str} | Dice: {dice_str} | Reward: {reward:.2f}")
+                except Exception:
+                    # Silently ignore errors to prevent crashes
+                    pass
+            
             # Accumulate reward for learning agent during episode
             # In normal mode: only agent 0 accumulates reward
             # In all_learn mode: only agent 0 accumulates reward (for VecMonitor compatibility)
@@ -889,6 +970,32 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         obs_for_opp, opp_reward, terminated, opp_truncated, opp_info = env.step(action)
                         done = terminated or opp_truncated
 
+                        # Debug mode: print opponent's move
+                        if self.debug_mode is not None and self.debug_mode.is_set():
+                            try:
+                                from ..utils.helpers import action_to_bid
+                                action_type, param1, param2 = action_to_bid(action, env.max_quantity)
+                                
+                                player_name = f"Player {self.active_agent_ids[i]}"
+                                if action_type == "bid":
+                                    move_str = f"{player_name}: BID {param1}x{param2}"
+                                elif action_type == "challenge":
+                                    move_str = f"{player_name}: CHALLENGE"
+                                elif action_type == "believe":
+                                    move_str = f"{player_name}: BELIEVE"
+                                else:
+                                    move_str = f"{player_name}: {action_type}"
+                                
+                                # Show current game state
+                                current_bid = env.game_state.current_bid
+                                bid_str = f"{current_bid[0]}x{current_bid[1]}" if current_bid else "none"
+                                dice_str = str(list(env.game_state.player_dice_count))
+                                
+                                print(f"[DEBUG] {move_str} | Current bid: {bid_str} | Dice: {dice_str}")
+                            except Exception:
+                                # Silently ignore errors to prevent crashes
+                                pass
+
                         # If episode ended on opponent's turn, mark as done to prevent infinite loops
                         if done:
                             self.episode_already_done[i] = True
@@ -962,6 +1069,18 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 win_status = "WIN" if learning_agent_won else "DEFEAT"
                 dice_str = str(list(env.game_state.player_dice_count))
                 print(f"{win_status} | reward: {final_reward:.2f} | stats: bids={bid_count}, challenges={challenge_count}, believe={believe_count}, invalid={invalid_action_count} | dice: {dice_str}")
+                
+                # Debug mode: wait for user input before continuing
+                if self.debug_mode is not None and self.debug_mode.is_set():
+                    try:
+                        print("\n[DEBUG MODE] Game ended. Press Enter to continue...")
+                        input()
+                    except (EOFError, KeyboardInterrupt):
+                        # Handle case where stdin is not available or user cancels
+                        pass
+                    except Exception:
+                        # Silently ignore errors to prevent crashes
+                        pass
                 
                 # Ensure info dict exists
                 if not isinstance(info, dict):

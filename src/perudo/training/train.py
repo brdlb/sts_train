@@ -25,6 +25,147 @@ from ..agents.transformer_extractor import TransformerFeaturesExtractor
 import sys
 import torch
 
+# Global debug mode flag (thread-safe)
+_debug_mode = threading.Event()
+_debug_mode_lock = threading.Lock()
+
+def get_debug_mode() -> bool:
+    """Get current debug mode state (thread-safe)."""
+    with _debug_mode_lock:
+        return _debug_mode.is_set()
+
+def set_debug_mode(enabled: bool) -> None:
+    """Set debug mode state (thread-safe)."""
+    with _debug_mode_lock:
+        if enabled:
+            _debug_mode.set()
+            print("\n[DEBUG MODE] ON - Выводится каждый ход в игре")
+        else:
+            _debug_mode.clear()
+            print("\n[DEBUG MODE] OFF - Обучение продолжается в обычном режиме")
+
+def _keyboard_listener_thread():
+    """Thread function to listen for keyboard shortcuts (Ctrl+D to toggle debug mode)."""
+    try:
+        from pynput import keyboard
+        
+        # Track last toggle time to prevent rapid toggling
+        last_toggle_time = [0.0]
+        toggle_lock = threading.Lock()
+        
+        def toggle_debug_mode():
+            """Toggle debug mode when Ctrl+D is pressed."""
+            try:
+                import time
+                current_time = time.time()
+                
+                # Prevent rapid toggling (minimum 0.3 seconds between toggles)
+                with toggle_lock:
+                    if current_time - last_toggle_time[0] < 0.3:
+                        return
+                    last_toggle_time[0] = current_time
+                
+                current_state = get_debug_mode()
+                set_debug_mode(not current_state)
+            except Exception as e:
+                # Silently ignore errors to prevent crashes
+                pass
+        
+        # Use GlobalHotKeys for better cross-platform support
+        # This is the recommended way to handle global hotkeys
+        hotkey_string = '<ctrl>+d'
+        
+        # Create GlobalHotKeys listener
+        def on_activate():
+            """Called when hotkey is pressed."""
+            toggle_debug_mode()
+        
+        # Try using GlobalHotKeys first (more reliable)
+        try:
+            print("[DEBUG MODE] Keyboard listener started. Press Ctrl+D to toggle debug mode.")
+            with keyboard.GlobalHotKeys({hotkey_string: on_activate}) as listener:
+                listener.join()
+        except Exception as e:
+            # If GlobalHotKeys fails, try manual tracking
+            print(f"[DEBUG MODE] GlobalHotKeys failed, using fallback method. Error: {e}")
+            # Fallback to manual tracking if GlobalHotKeys doesn't work
+            pressed_keys = set()
+            pressed_keys_lock = threading.Lock()
+            
+            def on_press(key):
+                """Handle key press events."""
+                try:
+                    with pressed_keys_lock:
+                        # Track Ctrl key (both left and right)
+                        if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r, keyboard.Key.ctrl):
+                            pressed_keys.add('ctrl')
+                        # Track 'd' key
+                        elif hasattr(key, 'char') and key.char and key.char.lower() == 'd':
+                            pressed_keys.add('d')
+                        elif hasattr(key, 'name') and key.name and key.name.lower() == 'd':
+                            pressed_keys.add('d')
+                        
+                        # Check if Ctrl+D is pressed
+                        if 'ctrl' in pressed_keys and 'd' in pressed_keys:
+                            toggle_debug_mode()
+                            # Clear to prevent multiple toggles
+                            pressed_keys.clear()
+                except Exception:
+                    pass
+            
+            def on_release(key):
+                """Handle key release events."""
+                try:
+                    with pressed_keys_lock:
+                        # Remove released keys from tracking
+                        if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r, keyboard.Key.ctrl):
+                            pressed_keys.discard('ctrl')
+                        elif hasattr(key, 'char') and key.char and key.char.lower() == 'd':
+                            pressed_keys.discard('d')
+                        elif hasattr(key, 'name') and key.name and key.name.lower() == 'd':
+                            pressed_keys.discard('d')
+                except Exception:
+                    pass
+            
+            # Start listening to keyboard events
+            print("[DEBUG MODE] Fallback keyboard listener started. Press Ctrl+D to toggle debug mode.")
+            with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+                listener.join()
+    
+    except ImportError:
+        # If pynput is not available, use fallback method with stdin
+        print("Warning: pynput not available. Using stdin-based debug mode toggle.")
+        print("Press 'd' + Enter to toggle debug mode, or Ctrl+C to exit.")
+        
+        import sys
+        import time
+        
+        # Use a separate thread for stdin reading to avoid blocking
+        def stdin_reader():
+            """Read stdin in a separate thread."""
+            while True:
+                try:
+                    line = sys.stdin.readline().strip().lower()
+                    if line == 'd':
+                        current_state = get_debug_mode()
+                        set_debug_mode(not current_state)
+                except (KeyboardInterrupt, EOFError):
+                    break
+                except Exception:
+                    # Silently ignore errors to prevent crashes
+                    time.sleep(0.1)
+        
+        # Start stdin reader thread
+        stdin_thread = threading.Thread(target=stdin_reader, daemon=True)
+        stdin_thread.start()
+        
+        # Keep main thread alive
+        while True:
+            time.sleep(1)
+    except Exception as e:
+        # Silently ignore errors to prevent crashes
+        pass
+
 # --- Очистка модуля из sys.modules, чтобы избежать предупреждения runpy ---
 if __name__ == "__main__":
     modname = __name__
@@ -954,6 +1095,14 @@ class SelfPlayTraining:
         print(f"Device: {device_str}")
         print(f"Number of environments (tables): {self.num_envs}")
         print(f"Number of players per table: {self.num_players}")
+        
+        # Start keyboard listener thread for debug mode toggle
+        keyboard_thread = threading.Thread(target=_keyboard_listener_thread, daemon=True)
+        keyboard_thread.start()
+        print("\n[DEBUG MODE] Press Ctrl+D to toggle debug mode (show every move in game)")
+        
+        # Store debug mode flag in vec_env for access during training
+        self._vec_env_raw.debug_mode = _debug_mode
         
         # Adjust total_timesteps to account for already completed training
         # If model was loaded with initial_timesteps > 0, we need to train for
