@@ -412,7 +412,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         </div>
 
         {/* Controls Column */}
-        <div className="w-full space-y-4">
+        <div className="w-full space-y-4 flex flex-col">
           {processing && gameState.current_player !== 0 && (
             <div className="bg-gray-700/50 p-4 rounded-lg flex items-center justify-center space-x-3 w-full max-w-lg mx-auto">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-300"></div>
@@ -447,7 +447,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
             </div>
           )}
 
-          <div className="flex-1 min-h-0">
+          <div className="flex-1 min-h-0 overflow-hidden">
             <GameHistory
               bidHistory={gameState.bid_history}
               currentBid={gameState.current_bid}

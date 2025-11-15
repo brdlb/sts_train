@@ -16,13 +16,20 @@ const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
   const playerName = getPlayerName(entry.player_id);
   const { action_type, action_data, consequences } = entry;
 
+  // Ensure consequences exists
+  if (!consequences) {
+    return `${playerName}: ${action_type}`;
+  }
+
   if (action_type === 'bid') {
-    return `${playerName} сделал ставку: ${action_data.quantity}x${action_data.value}`;
+    const qty = action_data?.quantity ?? '?';
+    const val = action_data?.value ?? '?';
+    return `${playerName} сделал ставку: ${qty}x${val}`;
   } else if (action_type === 'challenge') {
-    const bidInfo = consequences.bid_quantity && consequences.bid_value
+    const bidInfo = (consequences.bid_quantity && consequences.bid_value)
       ? ` ставку ${consequences.bid_quantity}x${consequences.bid_value}`
       : ' ставку';
-    const bidderName = consequences.bidder_id !== null && consequences.bidder_id !== undefined
+    const bidderName = (consequences.bidder_id !== null && consequences.bidder_id !== undefined && typeof consequences.bidder_id === 'number')
       ? getPlayerName(consequences.bidder_id)
       : 'другого игрока';
     
@@ -34,10 +41,10 @@ const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
       return `${playerName} оспорил${bidInfo} ${bidderName}.`;
     }
   } else if (action_type === 'believe') {
-    const bidInfo = consequences.bid_quantity && consequences.bid_value
+    const bidInfo = (consequences.bid_quantity && consequences.bid_value)
       ? ` ставку ${consequences.bid_quantity}x${consequences.bid_value}`
       : ' ставку';
-    const bidderName = consequences.bidder_id !== null && consequences.bidder_id !== undefined
+    const bidderName = (consequences.bidder_id !== null && consequences.bidder_id !== undefined && typeof consequences.bidder_id === 'number')
       ? getPlayerName(consequences.bidder_id)
       : 'другого игрока';
     
@@ -62,7 +69,12 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
       <div className="flex-grow overflow-y-auto pr-2">
         {extendedActionHistory && extendedActionHistory.length > 0 ? (
           <div className="space-y-2">
-            {extendedActionHistory.map((entry, index) => {
+            {extendedActionHistory.filter(entry => entry && entry.consequences).map((entry, index) => {
+              // Validate entry
+              if (!entry || !entry.consequences) {
+                return null;
+              }
+
               const actionDescription = formatActionDescription(entry);
               const isHuman = entry.player_id === 0;
               const bgColor = isHuman 
@@ -70,10 +82,10 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                 : (index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50');
               
               // Determine if there were consequences
-              const hasConsequences = entry.consequences.dice_lost !== null && entry.consequences.dice_lost > 0;
-              const consequenceColor = entry.consequences.challenge_success === true || entry.consequences.believe_success === true
+              const hasConsequences = entry.consequences && entry.consequences.dice_lost !== null && entry.consequences.dice_lost > 0;
+              const consequenceColor = (entry.consequences?.challenge_success === true || entry.consequences?.believe_success === true)
                 ? 'text-green-400' // Green for success
-                : entry.consequences.challenge_success === false || entry.consequences.believe_success === false
+                : (entry.consequences?.challenge_success === false || entry.consequences?.believe_success === false)
                 ? 'text-red-400' // Red for failure
                 : 'text-gray-400'; // Gray for neutral
 
@@ -85,12 +97,12 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                   <div className="font-semibold text-white mb-1">
                     {actionDescription}
                   </div>
-                  {hasConsequences && entry.consequences.loser_id !== null && (
+                  {hasConsequences && entry.consequences.loser_id !== null && entry.consequences.loser_id !== undefined && typeof entry.consequences.loser_id === 'number' && (
                     <div className={`text-sm ${consequenceColor} mt-1`}>
                       {getPlayerName(entry.consequences.loser_id)} lost {entry.consequences.dice_lost} die/dice
                     </div>
                   )}
-                  {entry.consequences.actual_count !== null && (
+                  {entry.consequences.actual_count !== null && entry.consequences.actual_count !== undefined && (
                     <div className="text-xs text-gray-400 mt-1">
                       Actual count: {entry.consequences.actual_count}
                     </div>

@@ -63,4 +63,5 @@ data/
 caddy.exe
 Caddyfile
 data/perudo_games.db
-.continue/agents/new-config.yaml
+.continue/
+data/perudo_games.db

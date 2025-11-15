@@ -59,7 +59,7 @@ function App() {
         {currentView === 'game' && currentGameId && (
           <GameBoard gameId={currentGameId} onGameEnd={handleGameEnd} />
         )}
-        {currentView === 'statistics' && <Statistics />}
+        {currentView === 'statistics' && <Statistics key="statistics" />}
       </main>
     </div>
   );
