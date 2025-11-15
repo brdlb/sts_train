@@ -16,13 +16,20 @@ const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
   const playerName = getPlayerName(entry.player_id);
   const { action_type, action_data, consequences } = entry;
 
+  // Ensure consequences exists
+  if (!consequences) {
+    return `${playerName}: ${action_type}`;
+  }
+
   if (action_type === 'bid') {
-    return `${playerName} сделал ставку: ${action_data.quantity}x${action_data.value}`;
+    const qty = action_data?.quantity ?? '?';
+    const val = action_data?.value ?? '?';
+    return `${playerName} сделал ставку: ${qty}x${val}`;
   } else if (action_type === 'challenge') {
-    const bidInfo = consequences.bid_quantity && consequences.bid_value
+    const bidInfo = (consequences.bid_quantity && consequences.bid_value)
       ? ` ставку ${consequences.bid_quantity}x${consequences.bid_value}`
       : ' ставку';
-    const bidderName = consequences.bidder_id !== null && consequences.bidder_id !== undefined
+    const bidderName = (consequences.bidder_id !== null && consequences.bidder_id !== undefined && typeof consequences.bidder_id === 'number')
       ? getPlayerName(consequences.bidder_id)
       : 'другого игрока';
     
@@ -34,10 +41,10 @@ const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
       return `${playerName} оспорил${bidInfo} ${bidderName}.`;
     }
   } else if (action_type === 'believe') {
-    const bidInfo = consequences.bid_quantity && consequences.bid_value
+    const bidInfo = (consequences.bid_quantity && consequences.bid_value)
       ? ` ставку ${consequences.bid_quantity}x${consequences.bid_value}`
       : ' ставку';
-    const bidderName = consequences.bidder_id !== null && consequences.bidder_id !== undefined
+    const bidderName = (consequences.bidder_id !== null && consequences.bidder_id !== undefined && typeof consequences.bidder_id === 'number')
       ? getPlayerName(consequences.bidder_id)
       : 'другого игрока';
     
@@ -57,53 +64,52 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
   const playerNames = ['You (Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
 
   return (
-    <div style={{ padding: '20px', border: '1px solid #ccc', borderRadius: '8px', marginTop: '20px', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <h3>История действий</h3>
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+    <div className="w-full h-full bg-gray-900/80 rounded-lg p-4 shadow-lg flex flex-col border border-gray-700">
+      <h3 className="text-xl font-semibold text-yellow-300 border-b border-yellow-300/30 pb-2 mb-2 flex-shrink-0">Action History</h3>
+      <div className="flex-grow overflow-y-auto pr-2">
         {extendedActionHistory && extendedActionHistory.length > 0 ? (
-          <div>
-            {extendedActionHistory.map((entry, index) => {
+          <div className="space-y-2">
+            {extendedActionHistory.filter(entry => entry && entry.consequences).map((entry, index) => {
+              // Validate entry
+              if (!entry || !entry.consequences) {
+                return null;
+              }
+
               const actionDescription = formatActionDescription(entry);
               const isHuman = entry.player_id === 0;
-              const backgroundColor = isHuman 
-                ? (index % 2 === 0 ? '#e3f2fd' : '#bbdefb')
-                : (index % 2 === 0 ? '#f9f9f9' : '#fff');
+              const bgColor = isHuman 
+                ? (index % 2 === 0 ? 'bg-blue-900/30' : 'bg-blue-800/30')
+                : (index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50');
               
               // Determine if there were consequences
-              const hasConsequences = entry.consequences.dice_lost !== null && entry.consequences.dice_lost > 0;
-              const consequenceColor = entry.consequences.challenge_success === true || entry.consequences.believe_success === true
-                ? '#4caf50' // Green for success
-                : entry.consequences.challenge_success === false || entry.consequences.believe_success === false
-                ? '#f44336' // Red for failure
-                : '#666'; // Gray for neutral
+              const hasConsequences = entry.consequences && entry.consequences.dice_lost !== null && entry.consequences.dice_lost > 0;
+              const consequenceColor = (entry.consequences?.challenge_success === true || entry.consequences?.believe_success === true)
+                ? 'text-green-400' // Green for success
+                : (entry.consequences?.challenge_success === false || entry.consequences?.believe_success === false)
+                ? 'text-red-400' // Red for failure
+                : 'text-gray-400'; // Gray for neutral
 
               return (
                 <div
                   key={index}
-                  style={{
-                    padding: '12px',
-                    borderBottom: '1px solid #eee',
-                    backgroundColor,
-                    marginBottom: '4px',
-                    borderRadius: '4px',
-                  }}
+                  className={`p-3 rounded-lg ${bgColor} border border-gray-700/50 transition-colors`}
                 >
-                  <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                  <div className="font-semibold text-white mb-1">
                     {actionDescription}
                   </div>
-                  {hasConsequences && entry.consequences.loser_id !== null && (
-                    <div style={{ fontSize: '0.9em', color: consequenceColor, marginTop: '4px' }}>
-                      {getPlayerName(entry.consequences.loser_id)} потерял {entry.consequences.dice_lost} кубик(ов)
+                  {hasConsequences && entry.consequences.loser_id !== null && entry.consequences.loser_id !== undefined && typeof entry.consequences.loser_id === 'number' && (
+                    <div className={`text-sm ${consequenceColor} mt-1`}>
+                      {getPlayerName(entry.consequences.loser_id)} lost {entry.consequences.dice_lost} die/dice
                     </div>
                   )}
-                  {entry.consequences.actual_count !== null && (
-                    <div style={{ fontSize: '0.85em', color: '#666', marginTop: '2px' }}>
-                      Фактическое количество: {entry.consequences.actual_count}
+                  {entry.consequences.actual_count !== null && entry.consequences.actual_count !== undefined && (
+                    <div className="text-xs text-gray-400 mt-1">
+                      Actual count: {entry.consequences.actual_count}
                     </div>
                   )}
                   {entry.consequences.action_valid === false && (
-                    <div style={{ fontSize: '0.85em', color: '#f44336', marginTop: '2px' }}>
-                      Недействительное действие: {entry.consequences.error_msg || 'Неизвестная ошибка'}
+                    <div className="text-xs text-red-400 mt-1">
+                      Invalid action: {entry.consequences.error_msg || 'Unknown error'}
                     </div>
                   )}
                 </div>
@@ -112,37 +118,28 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
           </div>
         ) : (
           // Fallback to simple bid history if extended history is not available
-          <>
+          <div className="space-y-2">
             {bidHistory.length === 0 && !currentBid && (
-              <div style={{ color: '#666', fontStyle: 'italic' }}>Нет действий пока</div>
+              <div className="text-gray-400 italic">No actions yet</div>
             )}
             {bidHistory.map((bid, index) => {
               const [playerId, quantity, value] = bid;
               return (
                 <div
                   key={index}
-                  style={{
-                    padding: '8px',
-                    borderBottom: '1px solid #eee',
-                    backgroundColor: index % 2 === 0 ? '#f9f9f9' : '#fff',
-                  }}
+                  className={`p-2 rounded ${index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50'} border border-gray-700/50`}
                 >
-                  <strong>{playerNames[playerId] || `Player ${playerId}`}:</strong> {quantity}x{value}
+                  <strong className="text-white">{playerNames[playerId] || `Player ${playerId}`}:</strong> 
+                  <span className="text-gray-300 ml-2">{quantity}x{value}</span>
                 </div>
               );
             })}
             {currentBid && (
-              <div
-                style={{
-                  padding: '8px',
-                  backgroundColor: '#e3f2fd',
-                  fontWeight: 'bold',
-                }}
-              >
-                <strong>Текущая ставка:</strong> {currentBid[0]}x{currentBid[1]}
+              <div className="p-2 rounded bg-blue-900/30 border border-blue-700/50 font-bold text-blue-300">
+                <strong>Current Bid:</strong> {currentBid[0]}x{currentBid[1]}
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
     </div>

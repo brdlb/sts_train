@@ -8,14 +8,7 @@ interface GameHistoryModalProps {
 
 const getPlayerName = (playerId: number, players: GameHistory['players']): string => {
   if (playerId === 0) return 'You (Human)';
-  const player = players.find(p => p.player_id === playerId);
-  if (player?.player_type === 'ai') {
-    const modelName = player.model_path 
-      ? player.model_path.split('/').pop()?.replace('.zip', '') || `AI Player ${playerId}`
-      : `AI Player ${playerId}`;
-    return modelName;
-  }
-  return `Player ${playerId}`;
+  return `AI Player ${playerId}`;
 };
 
 const formatActionDescription = (
