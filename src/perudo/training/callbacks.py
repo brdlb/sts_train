@@ -9,10 +9,14 @@ Contains callback classes for:
 
 import threading
 import numpy as np
+import logging
 from typing import Optional
 from stable_baselines3.common.callbacks import BaseCallback
 
 from .opponent_pool import OpponentPool
+
+# Setup logger for this module
+logger = logging.getLogger(__name__)
 
 
 class AdvantageNormalizationCallback(BaseCallback):
@@ -111,19 +115,19 @@ class AdaptiveEntropyCallback(BaseCallback):
             
             if self.verbose > 0:
                 ent_coef_str = f"{self.initial_ent_coef:.4f}" if self.initial_ent_coef is not None else "N/A"
-                print(f"AdaptiveEntropyCallback initialized:")
-                print(f"  Current model timesteps: {current_timesteps:,}")
-                print(f"  Initial ent_coef: {ent_coef_str}")
-                print(f"  Thresholds: low={self.threshold_low:.2f}, high={self.threshold_high:.2f}")
-                print(f"  Adjustment rate: {self.adjustment_rate:.4f}")
-                print(f"  Last update step set to: {self.last_update_step:,}")
+                logger.info("AdaptiveEntropyCallback initialized:")
+                logger.info(f"  Current model timesteps: {current_timesteps:,}")
+                logger.info(f"  Initial ent_coef: {ent_coef_str}")
+                logger.info(f"  Thresholds: low={self.threshold_low:.2f}, high={self.threshold_high:.2f}")
+                logger.info(f"  Adjustment rate: {self.adjustment_rate:.4f}")
+                logger.info(f"  Last update step set to: {self.last_update_step:,}")
         else:
             if self.verbose > 0:
                 ent_coef_str = f"{self.initial_ent_coef:.4f}" if self.initial_ent_coef is not None else "N/A"
-                print(f"AdaptiveEntropyCallback initialized with initial ent_coef={ent_coef_str}")
-                print(f"  Thresholds: low={self.threshold_low:.2f}, high={self.threshold_high:.2f}")
-                print(f"  Adjustment rate: {self.adjustment_rate:.4f}")
-                print(f"  Warning: Model doesn't have num_timesteps attribute, last_update_step remains at 0")
+                logger.info(f"AdaptiveEntropyCallback initialized with initial ent_coef={ent_coef_str}")
+                logger.info(f"  Thresholds: low={self.threshold_low:.2f}, high={self.threshold_high:.2f}")
+                logger.info(f"  Adjustment rate: {self.adjustment_rate:.4f}")
+                logger.warning("Model doesn't have num_timesteps attribute, last_update_step remains at 0")
     
     def _on_rollout_end(self) -> bool:
         """
@@ -168,14 +172,14 @@ class AdaptiveEntropyCallback(BaseCallback):
                             # Entropy too low (policy too deterministic) - increase ent_coef
                             new_ent_coef = min(old_ent_coef + self.adjustment_rate, self.max_ent_coef)
                             if new_ent_coef != old_ent_coef and self.verbose > 0:
-                                print(f"Entropy too low ({entropy_loss:.4f} < {self.threshold_low:.2f}), "
-                                      f"increasing ent_coef: {old_ent_coef:.4f} -> {new_ent_coef:.4f}")
+                                logger.info(f"Entropy too low ({entropy_loss:.4f} < {self.threshold_low:.2f}), "
+                                           f"increasing ent_coef: {old_ent_coef:.4f} -> {new_ent_coef:.4f}")
                         elif entropy_loss > self.threshold_high:
                             # Entropy too high (policy too random) - decrease ent_coef
                             new_ent_coef = max(old_ent_coef - self.adjustment_rate, self.min_ent_coef)
                             if new_ent_coef != old_ent_coef and self.verbose > 0:
-                                print(f"Entropy too high ({entropy_loss:.4f} > {self.threshold_high:.2f}), "
-                                      f"decreasing ent_coef: {old_ent_coef:.4f} -> {new_ent_coef:.4f}")
+                                logger.info(f"Entropy too high ({entropy_loss:.4f} > {self.threshold_high:.2f}), "
+                                           f"decreasing ent_coef: {old_ent_coef:.4f} -> {new_ent_coef:.4f}")
                         
                         # Update model's ent_coef
                         if new_ent_coef != old_ent_coef:
@@ -190,7 +194,7 @@ class AdaptiveEntropyCallback(BaseCallback):
                 except Exception as e:
                     # Don't crash training if adjustment fails
                     if self.verbose > 0:
-                        print(f"Warning: Failed to adjust entropy coefficient: {e}")
+                        logger.warning(f"Failed to adjust entropy coefficient: {e}")
         
         return True
     
@@ -211,7 +215,7 @@ class SelfPlayTrainingCallback(BaseCallback):
     """
     def __init__(
         self,
-        opponent_pool: OpponentPool,
+        opponent_pool: Optional[OpponentPool],
         snapshot_freq: int = 50000,  # Only used when save_snapshot_every_cycle=False
         verbose: int = 0,
         debug: bool = False,
@@ -223,17 +227,17 @@ class SelfPlayTrainingCallback(BaseCallback):
         self.snapshot_freq = snapshot_freq
         self.debug = debug
         self.save_snapshot_every_cycle = save_snapshot_every_cycle
-        self.snapshot_cycle_freq = snapshot_cycle_freq  # Сохранять снапшот каждые snapshot_cycle_freq циклов обучения
+        self.snapshot_cycle_freq = snapshot_cycle_freq  # Save snapshot every snapshot_cycle_freq training cycles
         self.current_step = 0
-        self.training_cycle_count = 0  # Счетчик циклов обучения
+        self.training_cycle_count = 0  # Training cycle counter
         self.vec_env = None
-        # Флаг для отслеживания, когда нужно сохранить снапшот после обновления модели
+        # Flag to track when snapshot should be saved after model update
         self._pending_snapshot = False
-        # Буферы для статистики
+        # Buffers for statistics
         self.episode_rewards = []
         self.episode_lengths = []
         self.episode_wins = []
-        # Для потокобезопасного доступа
+        # For thread-safe access
         self._lock = threading.Lock()
 
     def _on_training_start(self) -> None:
@@ -257,28 +261,28 @@ class SelfPlayTrainingCallback(BaseCallback):
                 underlying_vec_env = self.vec_env.venv
                 if hasattr(underlying_vec_env, 'debug_mode'):
                     underlying_vec_env.debug_mode = debug_event
-                    print("[DEBUG MODE ENABLED] Training will pause after each action. Press Enter to continue.")
+                    logger.info("[DEBUG MODE ENABLED] Training will pause after each action. Press Enter to continue.")
             elif hasattr(self.vec_env, 'debug_mode'):
                 self.vec_env.debug_mode = debug_event
-                print("[DEBUG MODE ENABLED] Training will pause after each action. Press Enter to continue.")
+                logger.info("[DEBUG MODE ENABLED] Training will pause after each action. Press Enter to continue.")
         
         # Synchronize current_step with model's num_timesteps for continued training
         # This is crucial to ensure snapshots are saved with correct step numbers
         if hasattr(self.model, 'num_timesteps'):
             self.current_step = self.model.num_timesteps
             if self.verbose > 0:
-                print(f"SelfPlayTrainingCallback: Synchronized current_step with model.num_timesteps = {self.current_step:,}")
+                logger.info(f"SelfPlayTrainingCallback: Synchronized current_step with model.num_timesteps = {self.current_step:,}")
         else:
             self.current_step = 0
             if self.verbose > 0:
-                print("SelfPlayTrainingCallback: Model doesn't have num_timesteps, starting from step 0")
+                logger.info("SelfPlayTrainingCallback: Model doesn't have num_timesteps, starting from step 0")
         
         # Verify logger is available
         if not hasattr(self, 'logger') or self.logger is None:
             if self.verbose > 0:
-                print("Warning: Logger not available in SelfPlayTrainingCallback._on_training_start()")
+                logger.warning("Logger not available in SelfPlayTrainingCallback._on_training_start()")
         elif self.verbose > 1:
-            print(f"Logger initialized in SelfPlayTrainingCallback: {type(self.logger)}")
+            logger.debug(f"Logger initialized in SelfPlayTrainingCallback: {type(self.logger)}")
     
     def _on_training_end(self) -> None:
         """Called when training ends."""
@@ -295,25 +299,27 @@ class SelfPlayTrainingCallback(BaseCallback):
             # Fallback: increment if model doesn't have num_timesteps (shouldn't happen with SB3)
             self.current_step += 1
         
-        # Сохраняем снапшот после обновления модели (если был установлен флаг в _on_rollout_end)
+        # Save snapshot after model update (if flag was set in _on_rollout_end)
         if self.save_snapshot_every_cycle and self._pending_snapshot:
-            # Always use model.num_timesteps for snapshot step numbers
-            # This ensures snapshots have correct step numbers matching the model's training progress
-            snapshot_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
-            self.opponent_pool.save_snapshot(
-                self.model,
-                snapshot_step,
-                prefix="snapshot",
-                force=True  # Force save regardless of snapshot_freq
-            )
-            if self.verbose > 0:
-                print(f"Saved snapshot after training cycle {self.training_cycle_count} (step {snapshot_step:,})")
+            # Only save snapshot if opponent_pool exists (not None, e.g., in botplay mode)
+            if self.opponent_pool is not None:
+                # Always use model.num_timesteps for snapshot step numbers
+                # This ensures snapshots have correct step numbers matching the model's training progress
+                snapshot_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
+                self.opponent_pool.save_snapshot(
+                    self.model,
+                    snapshot_step,
+                    prefix="snapshot",
+                    force=True  # Force save regardless of snapshot_freq
+                )
+                if self.verbose > 0:
+                    logger.info(f"Saved snapshot after training cycle {self.training_cycle_count} (step {snapshot_step:,})")
             self._pending_snapshot = False
         
-        # Собираем episode_info из infos всех env (SB3 их передаёт в self.locals["infos"])
+        # Collect episode_info from all env infos (SB3 passes them in self.locals["infos"])
         infos = self.locals.get("infos", [])
         for info in infos:
-            # Добавляем статистику только если эпизод завершен (info содержит episode_reward)
+            # Add statistics only if episode is completed (info contains episode_reward)
             if isinstance(info, dict) and "episode_reward" in info:
                 # Get episode information
                 episode_reward = info["episode_reward"]
@@ -329,10 +335,10 @@ class SelfPlayTrainingCallback(BaseCallback):
                     win = 1 if winner == 0 else 0
                     self.episode_wins.append(win)
         
-        # Стандартная логика снапшотов по частоте шагов (опционально, для обратной совместимости)
-        # Основное сохранение происходит после каждого цикла обучения через _pending_snapshot
-        # Эта логика может быть отключена, если save_snapshot_every_cycle=True
-        if not self.save_snapshot_every_cycle:
+        # Standard snapshot logic by step frequency (optional, for backward compatibility)
+        # Main saving happens after each training cycle through _pending_snapshot
+        # This logic can be disabled if save_snapshot_every_cycle=True
+        if not self.save_snapshot_every_cycle and self.opponent_pool is not None:
             # Use model.num_timesteps for step-based snapshot saving
             step_for_snapshot = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
             if step_for_snapshot % self.snapshot_freq == 0:
@@ -343,8 +349,8 @@ class SelfPlayTrainingCallback(BaseCallback):
                 )
                 if self.verbose > 0:
                     pool_stats = self.opponent_pool.get_statistics()
-                    print(f"Saved snapshot at step {step_for_snapshot:,}")
-                    print(f"Pool statistics: {pool_stats}")
+                    logger.info(f"Saved snapshot at step {step_for_snapshot:,}")
+                    logger.info(f"Pool statistics: {pool_stats}")
         
         # Update vec_env with current step for opponent sampling
         # Use model.num_timesteps as it's the authoritative source for step counting
@@ -376,16 +382,27 @@ class SelfPlayTrainingCallback(BaseCallback):
         but before the model update. We set a flag here and save the snapshot
         in the next _on_step() call, which happens after the model update.
         """
-        # Увеличиваем счетчик циклов обучения
+        # Increment training cycle counter
         self.training_cycle_count += 1
         
+        # Log training cycle completion
+        current_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
+        n_steps = getattr(self.model, 'n_steps', 'N/A')
+        if self.verbose > 0:
+            logger.info(f"\n{'='*70}")
+            logger.info(f"✓ Training cycle {self.training_cycle_count} completed!")
+            logger.info(f"  Total steps: {current_step}")
+            logger.info(f"  Steps per cycle: {n_steps}")
+            logger.info(f"  Next cycle: collecting {n_steps} more steps before next update...")
+            logger.info(f"{'='*70}\n")
         
         # Set flag to save snapshot after model update (in next _on_step())
-        # Сохраняем снапшот только каждые snapshot_cycle_freq циклов
-        if self.save_snapshot_every_cycle and self.training_cycle_count % self.snapshot_cycle_freq == 0:
+        # Save snapshot only every snapshot_cycle_freq cycles
+        # Only set flag if opponent_pool exists (not None, e.g., in botplay mode)
+        if self.save_snapshot_every_cycle and self.opponent_pool is not None and self.training_cycle_count % self.snapshot_cycle_freq == 0:
             self._pending_snapshot = True
             if self.verbose > 0:
-                print(f"Training cycle {self.training_cycle_count}: will save snapshot after model update")
+                logger.info(f"Training cycle {self.training_cycle_count}: will save snapshot after model update")
         
         # Log collected statistics to TensorBoard
         # Note: In SB3, logger is available after _on_training_start() is called
@@ -417,16 +434,17 @@ class SelfPlayTrainingCallback(BaseCallback):
                         self.logger.record("custom/win_rate", win_rate)
                         self.logger.record("custom/total_episodes", len(self.episode_rewards))
                         
-                        # Log opponent pool statistics
-                        pool_stats = self.opponent_pool.get_statistics()
-                        if pool_stats:
-                            self.logger.record("custom/opponent_pool_size", pool_stats.get("pool_size", 0))
-                            self.logger.record("custom/opponent_pool_total_episodes", pool_stats.get("total_episodes", 0))
-                            
-                            # Log average winrate of opponents in pool
-                            avg_winrate = pool_stats.get("average_winrate", 0.0)
-                            if avg_winrate is not None:
-                                self.logger.record("custom/opponent_pool_avg_winrate", avg_winrate)
+                        # Log opponent pool statistics (only if opponent_pool exists)
+                        if self.opponent_pool is not None:
+                            pool_stats = self.opponent_pool.get_statistics()
+                            if pool_stats:
+                                self.logger.record("custom/opponent_pool_size", pool_stats.get("pool_size", 0))
+                                self.logger.record("custom/opponent_pool_total_episodes", pool_stats.get("total_episodes", 0))
+                                
+                                # Log average winrate of opponents in pool
+                                avg_winrate = pool_stats.get("average_winrate", 0.0)
+                                if avg_winrate is not None:
+                                    self.logger.record("custom/opponent_pool_avg_winrate", avg_winrate)
                         
                         # In SB3, logger.dump() is called automatically after model.update()
                         # However, to ensure custom metrics are written, we can call it explicitly
@@ -436,12 +454,12 @@ class SelfPlayTrainingCallback(BaseCallback):
                     except Exception as e:
                         # Don't crash training if logging fails
                         if self.verbose > 0:
-                            print(f"Warning: Failed to log metrics to TensorBoard: {e}")
+                            logger.warning(f"Failed to log metrics to TensorBoard: {e}")
                             import traceback
-                            traceback.print_exc()
+                            logger.debug(traceback.format_exc())
                 elif self.verbose > 1:
                     # Debug: log when logger is not available
-                    print("Debug: Logger not available in callback (this is normal before learn() is called)")
+                    logger.debug("Logger not available in callback (this is normal before learn() is called)")
                 
                 # Clear buffers after logging (keep only recent episodes for rolling average)
                 # Keep last 100 episodes for better statistics

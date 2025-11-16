@@ -12,8 +12,12 @@ import re
 import glob
 import shutil
 import json
-from typing import Optional
+import logging
+from typing import Optional, Callable
 import torch
+
+# Setup logger for this module
+logger = logging.getLogger(__name__)
 
 
 def get_device(device: Optional[str] = None) -> str:
@@ -33,15 +37,15 @@ def get_device(device: Optional[str] = None) -> str:
     # Try to use GPU if available
     if torch.cuda.is_available():
         device = "cuda"
-        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+        logger.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
     else:
         device = "cpu"
-        print("CUDA not available, using CPU")
+        logger.info("CUDA not available, using CPU")
     
     return device
 
 
-def linear_schedule(initial_value: float, final_value: Optional[float] = None, decay_ratio: float = 0.3):
+def linear_schedule(initial_value: float, final_value: Optional[float] = None, decay_ratio: float = 0.3) -> Callable[[float], float]:
     """
     Linear learning rate schedule with slower decay.
     
@@ -162,7 +166,7 @@ def restore_model_from_opponent_pool(model_dir: str, pool_dir: str) -> Optional[
         with open(metadata_file, "r") as f:
             data = json.load(f)
     except Exception as e:
-        print(f"Warning: Could not load pool metadata: {e}")
+        logger.warning(f"Could not load pool metadata: {e}")
         return None
     
     snapshots = data.get("snapshots", {})
@@ -220,13 +224,13 @@ def restore_model_from_opponent_pool(model_dir: str, pool_dir: str) -> Optional[
         
         # Copy file
         shutil.copy2(source_path, target_path)
-        print(f"Restored model from opponent pool: {best_snapshot['id']}")
-        print(f"  Source: {source_path}")
-        print(f"  Target: {target_path}")
-        print(f"  Step: {best_snapshot['step']}, ELO: {best_snapshot['elo']:.2f}")
+        logger.info(f"Restored model from opponent pool: {best_snapshot['id']}")
+        logger.info(f"  Source: {source_path}")
+        logger.info(f"  Target: {target_path}")
+        logger.info(f"  Step: {best_snapshot['step']}, ELO: {best_snapshot['elo']:.2f}")
         return target_path
     except Exception as e:
-        print(f"Warning: Failed to copy model from opponent pool: {e}")
+        logger.warning(f"Failed to copy model from opponent pool: {e}")
         return None
 
 

@@ -298,6 +298,11 @@ class PerudoEnv(gym.Env):
                 self.game_state, self.active_player_id, quantity, value
             )
             if is_valid:
+                # Save game state BEFORE making the bid (for minimal bid calculation in reward)
+                saved_current_bid = self.game_state.current_bid
+                saved_bid_history = self.game_state.bid_history.copy()
+                saved_current_player = self.game_state.current_player
+                
                 action_valid = self.game_state.set_bid(
                     self.active_player_id, quantity, value
                 )
@@ -308,11 +313,31 @@ class PerudoEnv(gym.Env):
                     # Count bid action (for all players, not just learning agent)
                     self.episode_bid_count += 1
                     self.game_state.next_player()
-                    # calculate_reward now handles bid_small_penalty internally
+                    
+                    # calculate_reward now handles bid_small_penalty and minimal bid incentives
+                    # Temporarily restore state BEFORE the bid was made for reward calculation
+                    # (so we can compute what was minimal at the time)
+                    current_bid_after = self.game_state.current_bid
+                    current_history_after = self.game_state.bid_history.copy()
+                    current_player_after = self.game_state.current_player
+                    
+                    # Restore pre-bid state for calculation
+                    self.game_state.current_bid = saved_current_bid
+                    self.game_state.bid_history = saved_bid_history
+                    self.game_state.current_player = saved_current_player
+                    
                     reward += calculate_reward(
                         "bid", False, -1, self.active_player_id, dice_lost=0,
-                        reward_config=self.reward_config
+                        reward_config=self.reward_config,
+                        game_state=self.game_state,
+                        bid_quantity=quantity,
+                        bid_value=value
                     )
+                    
+                    # Restore post-bid state
+                    self.game_state.current_bid = current_bid_after
+                    self.game_state.bid_history = current_history_after
+                    self.game_state.current_player = current_player_after
             else:
                 # Invalid action - give penalty and pass turn
                 reward = self.reward_config.invalid_action_penalty

@@ -36,7 +36,7 @@ class RewardConfig:
     lose_penalty: float = 0  # Penalty for losing the game (negative reward to distinguish from win)
 
     # Dice loss penalties
-    dice_lost_penalty: float = -0.1 # Minimal penalty per die lost (for training stability)
+    dice_lost_penalty: float = -0.5 # Minimal penalty per die lost (for training stability)
 
     # Challenge rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
     challenge_success_reward: float = 0.2  # Reward for successful challenge (caught bluff) - DISABLED
@@ -47,8 +47,13 @@ class RewardConfig:
     believe_failure_penalty: float = -0.05  # Penalty for unsuccessful believe call that led to dice loss - DISABLED
 
     # Bid-related rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
-    bid_small_penalty: float = -0.01  # Small negative reward for bidding to encourage finishing the round - DISABLED
+    bid_small_penalty: float = 0.00  # Small negative reward for bidding to encourage finishing the round - DISABLED
     unsuccessful_bid_penalty: float = -0.1  # Penalty for unsuccessful bid that led to dice loss - DISABLED
+    
+    # Minimal bid incentives (ENABLED - gently encourages minimal bids)
+    bid_minimal_bonus: float = 0.003  # Small bonus for making minimal valid bid
+    bid_excess_penalty: float = -0.005  # Small penalty for exceeding minimal bid (proportional to excess)
+    bid_excess_threshold: int = 1  # Penalty applies only if excess >= threshold
 
 
     round_no_dice_lost_reward: float = 0.05  # Reward for each round in which the agent did not lose a die - DISABLED
@@ -76,25 +81,25 @@ class TrainingConfig:
     # PPO parameters (optimized to address explained_variance and approx_kl issues)
     policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
-    device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
+    device: Optional[str] = None 
     opponent_device: Optional[str] = "cpu"  
-    learning_rate: float = 3.0e-4  # Increased from 1.0e-4 for faster learning
+    learning_rate: float = 3.0e-4  
     n_steps: int = 8192
-    batch_size: int = 1024  # Increased for Transformer stability: larger batches improve attention mechanism gradients
-    n_epochs: int = 8  # Reduced from 10 to further decrease approx_kl (fewer updates = less aggressive)
+    batch_size: int = 2048  
+    n_epochs: int = 10  
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    clip_range: float = 0.2  # Decreased from 0.3 for more conservative updates
-    ent_coef: float = 0.4  # Increased from 0.15 for more exploration to find winning strategies
-    vf_coef: float = 0.75  # Decreased from 1.2: value loss was too dominant, interfering with policy learning
-    max_grad_norm: float = 0.5  # Critical for Transformer stability: prevents exploding gradients
+    clip_range: float = 0.25 
+    ent_coef: float = 0.4  
+    vf_coef: float = 0.75 
+    max_grad_norm: float = 0.5 
     
     # Adaptive entropy coefficient parameters
     adaptive_entropy: bool = True  # Enable adaptive entropy coefficient adjustment
     entropy_threshold_low: float = -3.48  # Slightly lower for earlier response
     entropy_threshold_high: float = -3.32  # Slightly higher for wider range
     entropy_adjustment_rate: float = 0.008  # Rate of ent_coef adjustment per update (slower)
-    entropy_max_coef: float = 0.25  # Maximum allowed ent_coef value to prevent excessive exploration  
+    entropy_max_coef: float = 0.4  # Maximum allowed ent_coef value (increased to match new ent_coef)  
     
     # Transformer parameters (optimized for sequence length 40)
     transformer_features_dim: int = 256  # Increased to handle richer feature information
@@ -106,7 +111,7 @@ class TrainingConfig:
     transformer_dropout: float = 0.1  # Explicit dropout parameter
 
     # Training parameters
-    num_envs: int = 1  # Number of parallel environments (tables)
+    num_envs: int = 4  # Number of parallel environments (tables)
     total_timesteps: int = 1_000_000
     save_freq: int = 100_000  # Save model every N steps
     eval_freq: int = 50_000  # Evaluate model every N steps

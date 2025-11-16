@@ -2,7 +2,7 @@
 Helper functions for working with Perudo.
 """
 
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Any
 import numpy as np
 from ..training.config import RewardConfig, DEFAULT_CONFIG
 
@@ -295,6 +295,9 @@ def calculate_reward(
     dice_lost: int = 0,
     reward_config: Optional[RewardConfig] = None,
     winner_dice_count: Optional[int] = None,
+    game_state: Optional[Any] = None,
+    bid_quantity: Optional[int] = None,
+    bid_value: Optional[int] = None,
 ) -> float:
     """
     Calculate intermediate step reward for agent action.
@@ -313,6 +316,9 @@ def calculate_reward(
         dice_lost: Number of dice lost (used for challenge/believe failure penalties only)
         reward_config: Reward configuration (uses DEFAULT_CONFIG if not provided)
         winner_dice_count: Number of dice remaining for winner (deprecated, not used)
+        game_state: Game state (required for minimal bid calculation)
+        bid_quantity: Bid quantity (required for minimal bid calculation)
+        bid_value: Bid value (required for minimal bid calculation)
 
     Returns:
         Intermediate step reward (does not include final episode rewards)
@@ -334,6 +340,33 @@ def calculate_reward(
     # Small penalty for bidding to encourage finishing the round
     if action_type == "bid":
         reward += reward_config.bid_small_penalty
+        
+        # Minimal bid incentives (combined approach #4)
+        # Only apply if we have the necessary information
+        if game_state is not None and bid_quantity is not None and bid_value is not None:
+            from ..game.rules import PerudoRules
+            
+            # Get minimal valid bid for current game state
+            # Note: We need to get minimal bid BEFORE the current bid was made
+            # So we temporarily remove current bid to compute minimal
+            minimal_bid = PerudoRules.get_minimal_valid_bid(game_state, player_id)
+            
+            if minimal_bid is not None:
+                min_quantity, min_value = minimal_bid
+                
+                # Check if current bid is exactly minimal
+                if bid_quantity == min_quantity and bid_value == min_value:
+                    # Apply bonus for minimal bid
+                    reward += reward_config.bid_minimal_bonus
+                else:
+                    # Calculate excess (how much quantity exceeds minimum)
+                    # Note: We compare quantity since it's the main factor
+                    excess = bid_quantity - min_quantity
+                    
+                    # Apply penalty only if excess meets threshold
+                    if excess >= reward_config.bid_excess_threshold:
+                        # Penalty proportional to excess
+                        reward += reward_config.bid_excess_penalty * excess
 
     # Intermediate rewards for bluffs and challenges
     if action_type == "challenge" and challenge_success is not None:

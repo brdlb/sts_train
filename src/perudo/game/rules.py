@@ -281,3 +281,56 @@ class PerudoRules:
                         actions.append(("bid", q, v))
 
         return actions
+
+    @staticmethod
+    def get_minimal_valid_bid(
+        game_state: GameState,
+        player_id: int,
+    ) -> Optional[Tuple[int, int]]:
+        """
+        Get the minimal valid bid for current game state.
+        
+        This is used to determine if a bid is minimal and should receive bonus,
+        or if it exceeds minimum and should receive penalty.
+        
+        Args:
+            game_state: Current game state
+            player_id: Player ID
+            
+        Returns:
+            Tuple (min_quantity, min_value) or None if no valid bid exists
+        """
+        if game_state.player_dice_count[player_id] == 0:
+            return None
+            
+        total_dice_in_game = sum(game_state.player_dice_count)
+        
+        # First bid in round
+        if game_state.current_bid is None:
+            if game_state.special_round_active:
+                # First bid in special round: quantity must be 1, any value
+                return (1, 1)  # Return minimum (value 1 is minimal)
+            else:
+                # First bid: minimum quantity is 1, but value cannot be 1
+                # So minimal bid is (1, 2)
+                return (1, 2)
+        
+        # Subsequent bids must be higher than current
+        prev_quantity, prev_value = game_state.current_bid
+        
+        # Find minimal valid bid by checking all possible combinations
+        # Start from smallest quantity and value
+        for q in range(1, total_dice_in_game + 1):
+            for v in range(1, game_state.total_dice_values + 1):
+                # In special round, value cannot change
+                if game_state.special_round_active and v != prev_value:
+                    continue
+                # In Palifico, player cannot change value
+                if game_state.palifico_active[player_id] and v != prev_value:
+                    continue
+                # Check if this is a valid higher bid
+                if game_state._is_bid_higher(q, v, prev_quantity, prev_value):
+                    return (q, v)
+        
+        # No valid bid found (shouldn't happen in normal gameplay)
+        return None

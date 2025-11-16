@@ -3,7 +3,8 @@ Training module for agents.
 """
 
 from .config import Config, GameConfig, TrainingConfig, DEFAULT_CONFIG
-from .train import SelfPlayTraining, main
+from .train import SelfPlayTraining
+from .cli import main
 from .opponent_pool import OpponentPool, OpponentSnapshot
 from .callbacks import (
     AdvantageNormalizationCallback,
