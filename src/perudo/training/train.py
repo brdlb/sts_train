@@ -20,10 +20,153 @@ from stable_baselines3.common.vec_env import VecNormalize, VecMonitor
 from ..game.perudo_vec_env import PerudoMultiAgentVecEnv
 from .config import Config, DEFAULT_CONFIG
 from .opponent_pool import OpponentPool
+from .rule_based_pool import RuleBasedOpponentPool
 from ..agents.transformer_extractor import TransformerFeaturesExtractor
 
 import sys
 import torch
+
+
+_debug_mode = threading.Event()
+_debug_mode.clear()  # Enable debug mode by default 
+_debug_mode_lock = threading.Lock()
+
+def get_debug_mode() -> bool:
+    """Get current debug mode state (thread-safe)."""
+    with _debug_mode_lock:
+        return _debug_mode.is_set()
+
+def set_debug_mode(enabled: bool) -> None:
+    """Set debug mode state (thread-safe)."""
+    with _debug_mode_lock:
+        if enabled:
+            _debug_mode.set()
+            print("\n[DEBUG MODE] ON - Выводится каждый ход в игре")
+        else:
+            _debug_mode.clear()
+            print("\n[DEBUG MODE] OFF - Обучение продолжается в обычном режиме")
+
+def _keyboard_listener_thread():
+    """Thread function to listen for keyboard shortcuts (Ctrl+D to toggle debug mode)."""
+    try:
+        from pynput import keyboard
+        
+        # Track last toggle time to prevent rapid toggling
+        last_toggle_time = [0.0]
+        toggle_lock = threading.Lock()
+        
+        def toggle_debug_mode():
+            """Toggle debug mode when Ctrl+D is pressed."""
+            try:
+                import time
+                current_time = time.time()
+                
+                # Prevent rapid toggling (minimum 0.3 seconds between toggles)
+                with toggle_lock:
+                    if current_time - last_toggle_time[0] < 0.3:
+                        return
+                    last_toggle_time[0] = current_time
+                
+                current_state = get_debug_mode()
+                set_debug_mode(not current_state)
+            except Exception as e:
+                # Silently ignore errors to prevent crashes
+                pass
+        
+        # Use GlobalHotKeys for better cross-platform support
+        # This is the recommended way to handle global hotkeys
+        hotkey_string = '<ctrl>+d'
+        
+        # Create GlobalHotKeys listener
+        def on_activate():
+            """Called when hotkey is pressed."""
+            toggle_debug_mode()
+        
+        # Try using GlobalHotKeys first (more reliable)
+        try:
+            print("[DEBUG MODE] Keyboard listener started. Press Ctrl+D to toggle debug mode.")
+            with keyboard.GlobalHotKeys({hotkey_string: on_activate}) as listener:
+                listener.join()
+        except Exception as e:
+            # If GlobalHotKeys fails, try manual tracking
+            print(f"[DEBUG MODE] GlobalHotKeys failed, using fallback method. Error: {e}")
+            # Fallback to manual tracking if GlobalHotKeys doesn't work
+            pressed_keys = set()
+            pressed_keys_lock = threading.Lock()
+            
+            def on_press(key):
+                """Handle key press events."""
+                try:
+                    with pressed_keys_lock:
+                        # Track Ctrl key (both left and right)
+                        if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r, keyboard.Key.ctrl):
+                            pressed_keys.add('ctrl')
+                        # Track 'd' key
+                        elif hasattr(key, 'char') and key.char and key.char.lower() == 'd':
+                            pressed_keys.add('d')
+                        elif hasattr(key, 'name') and key.name and key.name.lower() == 'd':
+                            pressed_keys.add('d')
+                        
+                        # Check if Ctrl+D is pressed
+                        if 'ctrl' in pressed_keys and 'd' in pressed_keys:
+                            toggle_debug_mode()
+                            # Clear to prevent multiple toggles
+                            pressed_keys.clear()
+                except Exception:
+                    pass
+            
+            def on_release(key):
+                """Handle key release events."""
+                try:
+                    with pressed_keys_lock:
+                        # Remove released keys from tracking
+                        if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r, keyboard.Key.ctrl):
+                            pressed_keys.discard('ctrl')
+                        elif hasattr(key, 'char') and key.char and key.char.lower() == 'd':
+                            pressed_keys.discard('d')
+                        elif hasattr(key, 'name') and key.name and key.name.lower() == 'd':
+                            pressed_keys.discard('d')
+                except Exception:
+                    pass
+            
+            # Start listening to keyboard events
+            print("[DEBUG MODE] Fallback keyboard listener started. Press Ctrl+D to toggle debug mode.")
+            with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+                listener.join()
+    
+    except ImportError:
+        # If pynput is not available, use fallback method with stdin
+        print("Warning: pynput not available. Using stdin-based debug mode toggle.")
+        print("Press 'd' + Enter to toggle debug mode, or Ctrl+C to exit.")
+        
+        import sys
+        import time
+        
+        # Use a separate thread for stdin reading to avoid blocking
+        def stdin_reader():
+            """Read stdin in a separate thread."""
+            while True:
+                try:
+                    line = sys.stdin.readline().strip().lower()
+                    if line == 'd':
+                        current_state = get_debug_mode()
+                        set_debug_mode(not current_state)
+                except (KeyboardInterrupt, EOFError):
+                    break
+                except Exception:
+                    # Silently ignore errors to prevent crashes
+                    time.sleep(0.1)
+        
+        # Start stdin reader thread
+        stdin_thread = threading.Thread(target=stdin_reader, daemon=True)
+        stdin_thread.start()
+        
+        # Keep main thread alive
+        while True:
+            time.sleep(1)
+    except Exception as e:
+        # Silently ignore errors to prevent crashes
+        pass
 
 # --- Очистка модуля из sys.modules, чтобы избежать предупреждения runpy ---
 if __name__ == "__main__":
@@ -512,17 +655,19 @@ class SelfPlayTrainingCallback(BaseCallback):
         
         # Сохраняем снапшот после обновления модели (если был установлен флаг в _on_rollout_end)
         if self.save_snapshot_every_cycle and self._pending_snapshot:
-            # Always use model.num_timesteps for snapshot step numbers
-            # This ensures snapshots have correct step numbers matching the model's training progress
-            snapshot_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
-            self.opponent_pool.save_snapshot(
-                self.model,
-                snapshot_step,
-                prefix="snapshot",
-                force=True  # Force save regardless of snapshot_freq
-            )
-            if self.verbose > 0:
-                print(f"Saved snapshot after training cycle {self.training_cycle_count} (step {snapshot_step:,})")
+            # Only save snapshot if opponent_pool exists (not None, e.g., in botplay mode)
+            if self.opponent_pool is not None:
+                # Always use model.num_timesteps for snapshot step numbers
+                # This ensures snapshots have correct step numbers matching the model's training progress
+                snapshot_step = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
+                self.opponent_pool.save_snapshot(
+                    self.model,
+                    snapshot_step,
+                    prefix="snapshot",
+                    force=True  # Force save regardless of snapshot_freq
+                )
+                if self.verbose > 0:
+                    print(f"Saved snapshot after training cycle {self.training_cycle_count} (step {snapshot_step:,})")
             self._pending_snapshot = False
         
         # Собираем episode_info из infos всех env (SB3 их передаёт в self.locals["infos"])
@@ -547,7 +692,7 @@ class SelfPlayTrainingCallback(BaseCallback):
         # Стандартная логика снапшотов по частоте шагов (опционально, для обратной совместимости)
         # Основное сохранение происходит после каждого цикла обучения через _pending_snapshot
         # Эта логика может быть отключена, если save_snapshot_every_cycle=True
-        if not self.save_snapshot_every_cycle:
+        if not self.save_snapshot_every_cycle and self.opponent_pool is not None:
             # Use model.num_timesteps for step-based snapshot saving
             step_for_snapshot = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else self.current_step
             if step_for_snapshot % self.snapshot_freq == 0:
@@ -607,7 +752,8 @@ class SelfPlayTrainingCallback(BaseCallback):
         
         # Set flag to save snapshot after model update (in next _on_step())
         # Сохраняем снапшот только каждые snapshot_cycle_freq циклов
-        if self.save_snapshot_every_cycle and self.training_cycle_count % self.snapshot_cycle_freq == 0:
+        # Only set flag if opponent_pool exists (not None, e.g., in botplay mode)
+        if self.save_snapshot_every_cycle and self.opponent_pool is not None and self.training_cycle_count % self.snapshot_cycle_freq == 0:
             self._pending_snapshot = True
             if self.verbose > 0:
                 print(f"Training cycle {self.training_cycle_count}: will save snapshot after model update")
@@ -642,16 +788,17 @@ class SelfPlayTrainingCallback(BaseCallback):
                         self.logger.record("custom/win_rate", win_rate)
                         self.logger.record("custom/total_episodes", len(self.episode_rewards))
                         
-                        # Log opponent pool statistics
-                        pool_stats = self.opponent_pool.get_statistics()
-                        if pool_stats:
-                            self.logger.record("custom/opponent_pool_size", pool_stats.get("pool_size", 0))
-                            self.logger.record("custom/opponent_pool_total_episodes", pool_stats.get("total_episodes", 0))
-                            
-                            # Log average winrate of opponents in pool
-                            avg_winrate = pool_stats.get("average_winrate", 0.0)
-                            if avg_winrate is not None:
-                                self.logger.record("custom/opponent_pool_avg_winrate", avg_winrate)
+                        # Log opponent pool statistics (only if opponent_pool exists)
+                        if self.opponent_pool is not None:
+                            pool_stats = self.opponent_pool.get_statistics()
+                            if pool_stats:
+                                self.logger.record("custom/opponent_pool_size", pool_stats.get("pool_size", 0))
+                                self.logger.record("custom/opponent_pool_total_episodes", pool_stats.get("total_episodes", 0))
+                                
+                                # Log average winrate of opponents in pool
+                                avg_winrate = pool_stats.get("average_winrate", 0.0)
+                                if avg_winrate is not None:
+                                    self.logger.record("custom/opponent_pool_avg_winrate", avg_winrate)
                         
                         # In SB3, logger.dump() is called automatically after model.update()
                         # However, to ensure custom metrics are written, we can call it explicitly
@@ -719,18 +866,46 @@ class SelfPlayTraining:
         pool_dir = os.path.join(config.training.model_dir, "opponent_pool")
         # Use CPU for opponent models to avoid GPU overhead from single-observation predictions
         opponent_device = getattr(config.training, 'opponent_device', 'cpu')
-        self.opponent_pool = OpponentPool(
-            pool_dir=pool_dir,
-            max_pool_size=20,
-            min_pool_size=10,
-            keep_best=3,
-            snapshot_freq=50000,
-            opponent_device=opponent_device,
-        )
+        
+        # Get max_history_length for use in pools and environment
+        max_history_length = getattr(config.training, 'transformer_history_length', config.game.history_length)
+        
+        # Initialize opponent pools based on training mode
+        self.training_mode = getattr(config.training, 'training_mode', 'selfplay')
+        self.use_rule_based_opponents = getattr(config.training, 'use_rule_based_opponents', False)
+        self.mixed_mode_ratio = getattr(config.training, 'mixed_mode_ratio', 0.5)
+        
+        # Create rule-based opponent pool if needed
+        self.rule_based_pool = None
+        if self.use_rule_based_opponents and self.training_mode in ('botplay', 'mixed'):
+            bot_difficulty_distribution = getattr(
+                config.training, 'bot_difficulty_distribution',
+                {"EASY": 0.33, "MEDIUM": 0.34, "HARD": 0.33}
+            )
+            self.rule_based_pool = RuleBasedOpponentPool(
+                max_quantity=config.game.max_quantity,
+                max_players=config.game.max_players,
+                max_history_length=max_history_length,
+                difficulty_distribution=bot_difficulty_distribution,
+            )
+            print(f"Initialized rule-based opponent pool with {len(self.rule_based_pool.bots)} bot personalities")
+        
+        # Create RL opponent pool (for selfplay or mixed mode)
+        self.opponent_pool = None
+        if self.training_mode in ('selfplay', 'mixed'):
+            self.opponent_pool = OpponentPool(
+                pool_dir=pool_dir,
+                max_pool_size=20,
+                min_pool_size=10,
+                keep_best=3,
+                snapshot_freq=50000,
+                opponent_device=opponent_device,
+            )
+        else:
+            # In botplay mode, don't create RL opponent pool
+            print("Training mode: botplay - using only rule-based opponents")
         
         # Create vectorized environment
-        # Use transformer_history_length from config if available, otherwise use history_length
-        max_history_length = getattr(config.training, 'transformer_history_length', config.game.history_length)
         debug_moves = getattr(config.training, 'debug_moves', False)
         vec_env_raw = PerudoMultiAgentVecEnv(
             num_envs=self.num_envs,
@@ -746,6 +921,9 @@ class SelfPlayTraining:
             max_players=config.game.max_players,
             reward_config=config.reward,
             debug_moves=debug_moves,
+            rule_based_pool=self.rule_based_pool,
+            training_mode=self.training_mode,
+            mixed_mode_ratio=self.mixed_mode_ratio,
         )
         
         # Wrap with ActionMasker to enable action masking for MaskablePPO
@@ -833,15 +1011,15 @@ class SelfPlayTraining:
                 self.model.tensorboard_log = os.path.abspath(config.training.log_dir)
                 
                 # Update learning rate schedule for continued training
-                # Use slower decay: final LR is 30% of initial (instead of very low 1e-5)
+                # Use slower decay: final LR is 50% of initial (slower decay for better learning)
                 initial_lr = config.training.learning_rate
-                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.3)
+                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.5)
                 self.model.learning_rate = lr_schedule
-                final_lr = initial_lr * 0.3
+                final_lr = initial_lr * 0.5
                 
                 print(f"Successfully loaded model from {latest_model_path}")
                 print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-                print(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
+                print(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 50% of initial)")
                 
                 # Get current timesteps from model (SB3 saves this in the model)
                 self.initial_timesteps = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else 0
@@ -906,10 +1084,10 @@ class SelfPlayTraining:
                 policy_kwargs = config.training.policy_kwargs
             
             # Create learning rate schedule: linear decay with slower rate
-            # Final LR is 30% of initial (instead of very low 1e-5) for more stable training
+            # Final LR is 50% of initial (slower decay for better learning throughout training)
             initial_lr = config.training.learning_rate
-            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.3)
-            final_lr = initial_lr * 0.3
+            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.5)
+            final_lr = initial_lr * 0.5
             
             self.model = MaskablePPO(
                 policy=config.training.policy,
@@ -931,7 +1109,7 @@ class SelfPlayTraining:
             )
             
             print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-            print(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
+            print(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 50% of initial)")
             
             # For new models, initial_timesteps is 0
             self.initial_timesteps = 0
@@ -940,7 +1118,13 @@ class SelfPlayTraining:
         # Update opponent pool with current model
         # VecMonitor forwards attributes, but we also set it on raw env for safety
         self.vec_env.current_model = self.model
+        # Update opponent models to use current model (for self-play mode)
+        if hasattr(self._vec_env_raw, 'update_opponent_models_for_current_model'):
+            self._vec_env_raw.update_opponent_models_for_current_model()
         self._vec_env_raw.current_model = self.model
+        # Update opponent models to use current model (for self-play mode)
+        if hasattr(self._vec_env_raw, 'update_opponent_models_for_current_model'):
+            self._vec_env_raw.update_opponent_models_for_current_model()
         
         # Statistics
         self.episode_rewards = []
@@ -954,6 +1138,14 @@ class SelfPlayTraining:
         print(f"Device: {device_str}")
         print(f"Number of environments (tables): {self.num_envs}")
         print(f"Number of players per table: {self.num_players}")
+        
+        # Start keyboard listener thread for debug mode toggle
+        keyboard_thread = threading.Thread(target=_keyboard_listener_thread, daemon=True)
+        keyboard_thread.start()
+        print("\n[DEBUG MODE] Press Ctrl+D to toggle debug mode (show every move in game)")
+        
+        # Store debug mode flag in vec_env for access during training
+        self._vec_env_raw.debug_mode = _debug_mode
         
         # Adjust total_timesteps to account for already completed training
         # If model was loaded with initial_timesteps > 0, we need to train for
@@ -1028,7 +1220,7 @@ class SelfPlayTraining:
         selfplay_callback = SelfPlayTrainingCallback(
             opponent_pool=self.opponent_pool,
             verbose=self.config.training.verbose,
-            debug=False
+            debug=False  # Enable debug mode by default
         )
         callbacks.append(selfplay_callback)
         
@@ -1069,9 +1261,10 @@ class SelfPlayTraining:
         self.model.save(model_path)
         print(f"Final model saved to {model_path}")
         
-        # Print pool statistics
-        pool_stats = self.opponent_pool.get_statistics()
-        print(f"Opponent pool statistics: {pool_stats}")
+        # Print pool statistics (only if opponent_pool exists)
+        if self.opponent_pool is not None:
+            pool_stats = self.opponent_pool.get_statistics()
+            print(f"Opponent pool statistics: {pool_stats}")
         
     def save_model(self, path: str):
         """Save the current model."""
@@ -1083,6 +1276,9 @@ class SelfPlayTraining:
         with contextlib.redirect_stdout(StringIO()):
             self.model = MaskablePPO.load(path, env=self.vec_env)
         self.vec_env.current_model = self.model
+        # Update opponent models to use current model (for self-play mode)
+        if hasattr(self._vec_env_raw, 'update_opponent_models_for_current_model'):
+            self._vec_env_raw.update_opponent_models_for_current_model()
 
 
 def main():

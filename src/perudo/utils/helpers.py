@@ -110,6 +110,8 @@ def create_observation_dict(
     max_players: int = 6,
     agent_id: Optional[int] = None,
     num_agents: int = 4,
+    special_round_active: bool = False,
+    round_number: int = 0,
 ) -> Dict[str, np.ndarray]:
     """
     Create observation dictionary for transformer-based agent.
@@ -126,6 +128,8 @@ def create_observation_dict(
         max_players: Maximum number of players
         agent_id: Agent ID for one-hot encoding (0 to num_agents-1)
         num_agents: Total number of agents (for one-hot encoding)
+        special_round_active: Whether special round is active
+        round_number: Current round number
     
     Returns:
         Dictionary with 'bid_history' and 'static_info' keys
@@ -176,6 +180,12 @@ def create_observation_dict(
     
     # Believe flag (1 value)
     static_parts.append(np.array([1.0 if believe_called else 0.0], dtype=np.float32))
+    
+    # Special round active flag (1 value)
+    static_parts.append(np.array([1.0 if special_round_active else 0.0], dtype=np.float32))
+    
+    # Round number (1 value)
+    static_parts.append(np.array([float(round_number)], dtype=np.float32))
     
     # Current player's dice (5 values, pad with zeros if less)
     dice_padded = player_dice + [0] * (5 - len(player_dice))
@@ -287,39 +297,43 @@ def calculate_reward(
     winner_dice_count: Optional[int] = None,
 ) -> float:
     """
-    Calculate reward for agent.
+    Calculate intermediate step reward for agent action.
+
+    This function calculates ONLY intermediate step rewards (bid penalties, challenge rewards, etc.).
+    Final episode rewards (win_reward, win_dice_bonus, lose_penalty, dice_lost_penalty) are
+    calculated separately in RewardManager.calculate_final_reward() to avoid double counting.
 
     Args:
         action_type: Action type ('bid', 'challenge', 'believe')
-        game_over: Whether game is over
-        winner: Winner ID (if game is over)
+        game_over: Whether game is over (not used for final rewards, only for documentation)
+        winner: Winner ID (not used for final rewards, only for documentation)
         player_id: Current player ID
         challenge_success: Whether challenge succeeded (if applicable)
         believe_success: Whether believe succeeded (if applicable)
-        dice_lost: Number of dice lost
+        dice_lost: Number of dice lost (used for challenge/believe failure penalties only)
         reward_config: Reward configuration (uses DEFAULT_CONFIG if not provided)
-        winner_dice_count: Number of dice remaining for winner (if game is over and player won)
+        winner_dice_count: Number of dice remaining for winner (deprecated, not used)
 
     Returns:
-        Reward
+        Intermediate step reward (does not include final episode rewards)
     """
     if reward_config is None:
         reward_config = DEFAULT_CONFIG.reward
 
     reward = 0.0
 
-    # Reward for winning game
-    # NOTE: lose_penalty is NOT applied here - it's applied in perudo_vec_env.py
-    # when calculating final reward to avoid double application
-    if game_over and winner == player_id:
-        reward += reward_config.win_reward
-        # Add bonus for remaining dice if winner_dice_count is provided
-        if winner_dice_count is not None and reward_config.win_dice_bonus > 0:
-            reward += reward_config.win_dice_bonus * winner_dice_count
+    # NOTE: Final episode rewards (win_reward, win_dice_bonus, lose_penalty) are NOT applied here.
+    # They are applied only once at episode end in RewardManager.calculate_final_reward()
+    # to avoid double counting. This function only calculates intermediate step rewards.
 
-    # Penalty for losing dice
-    if dice_lost > 0:
-        reward += reward_config.dice_lost_penalty * dice_lost
+    # NOTE: Penalty for losing dice (dice_lost_penalty) is NOT applied here - it's applied only at episode end
+    # in RewardManager.calculate_final_reward() to avoid double counting.
+    # The dice_lost parameter is still used for challenge/believe failure penalties below,
+    # but NOT for the per-die penalty which is calculated separately at episode end.
+
+    # Small penalty for bidding to encourage finishing the round
+    if action_type == "bid":
+        reward += reward_config.bid_small_penalty
 
     # Intermediate rewards for bluffs and challenges
     if action_type == "challenge" and challenge_success is not None:

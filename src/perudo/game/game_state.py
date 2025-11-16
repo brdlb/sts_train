@@ -49,17 +49,32 @@ class GameState:
         # Game status
         self.game_over: bool = False
         self.winner: Optional[int] = None
+        
+        # Round tracking
+        self.round_number: int = 0
 
         # Initialize initial state
         self.reset()
 
-    def reset(self) -> None:
-        """Reset game to initial state."""
+    def reset(self, seed: Optional[int] = None) -> None:
+        """
+        Reset game to initial state.
+        
+        Args:
+            seed: Optional random seed for reproducible starting player selection.
+                  If None, uses numpy's current random state.
+        """
         self.player_dice = []
         self.current_bid = None
         self.bid_history = []
         # Randomly select starting player from all available players
-        self.current_player = np.random.randint(0, self.num_players)
+        if seed is not None:
+            # Use local random generator with seed for reproducible selection
+            rng = np.random.default_rng(seed)
+            self.current_player = rng.integers(0, self.num_players)
+        else:
+            # Use global random state (will use seed if set by gymnasium super().reset())
+            self.current_player = np.random.randint(0, self.num_players)
         self.player_dice_count = [self.dice_per_player] * self.num_players
         self.palifico_active = [False] * self.num_players
         self.special_round_active = False
@@ -68,6 +83,7 @@ class GameState:
         self.believe_called = False
         self.game_over = False
         self.winner = None
+        self.round_number = 0
 
         # Roll dice for all players
         self.roll_dice()
@@ -324,17 +340,46 @@ class GameState:
 
     def next_player(self) -> None:
         """Move to next player."""
+        # CRITICAL: If game is already over, don't try to move to next player
+        # This prevents infinite loops when only one player (the winner) has dice
+        # and current_player points to a player without dice
+        if self.game_over:
+            return
+        
+        prev_player = self.current_player
         self.current_player = (self.current_player + 1) % self.num_players
 
         # Skip players with no dice
         max_attempts = self.num_players
         attempts = 0
+        skipped_players = []
         while (
             self.player_dice_count[self.current_player] == 0
             and attempts < max_attempts
         ):
+            skipped_players.append(self.current_player)
             self.current_player = (self.current_player + 1) % self.num_players
             attempts += 1
+        
+        # Debug output for turn transfer (if debug_mode is available from calling context)
+        # Note: We can't access debug_mode directly here, so we'll check if there's a global debug flag
+        try:
+            # Try to import debug mode from train module
+            try:
+                from ..training.train import get_debug_mode
+                if get_debug_mode():
+                    if skipped_players:
+                        skip_str = ", ".join([f"Player {p}" for p in skipped_players])
+                        print(f"[DEBUG TURN] next_player(): Player {prev_player} -> Player {self.current_player} "
+                              f"(пропущены игроки без костей: {skip_str})")
+                    else:
+                        print(f"[DEBUG TURN] next_player(): Player {prev_player} -> Player {self.current_player}")
+            except (ImportError, AttributeError):
+                # Debug mode not available, skip logging
+                pass
+        except Exception:
+            # Silently ignore any errors to prevent crashes
+            pass
         
         # Check if game should be over after skipping players
         # This ensures game_over is set correctly even if all but one player

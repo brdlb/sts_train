@@ -86,12 +86,7 @@ async def get_game_state(game_id: str):
     if session is None:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    # Sync state from game_state before processing AI turns
-    # This ensures we have the correct current_player
-    session.current_player = session.env.game_state.current_player
-    session.game_over = session.env.game_state.game_over
-
-    # Don't process AI turns here - client will subscribe to SSE stream
+    # get_public_state() automatically syncs state, so no manual sync needed
     return session.get_public_state()
 
 
@@ -120,12 +115,7 @@ async def make_action(game_id: str, request: ActionRequest):
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
 
-    # Sync state from game_state after human action
-    # This ensures we have the correct current_player after the action
-    session.current_player = session.env.game_state.current_player
-    session.game_over = session.env.game_state.game_over
-
-    # Don't process AI turns here - client will subscribe to SSE stream
+    # _process_action() already syncs state, so no manual sync needed
     # Get updated state
     result["state"] = session.get_public_state()
 
@@ -156,9 +146,8 @@ async def stream_ai_turns(game_id: str):
     def generate():
         """Generator function for SSE stream."""
         try:
-            # Sync state before processing
-            session.current_player = session.env.game_state.current_player
-            session.game_over = session.env.game_state.game_over
+            # Sync state before processing (get_public_state() will sync, but we need to check first)
+            session._sync_state()
 
             # Only process if it's not human's turn and game is not over
             if session.game_over or session.current_player == 0:

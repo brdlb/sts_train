@@ -36,14 +36,14 @@ class RewardConfig:
     lose_penalty: float = 0  # Penalty for losing the game (negative reward to distinguish from win)
 
     # Dice loss penalties
-    dice_lost_penalty: float = -0.5 # Minimal penalty per die lost (for training stability)
+    dice_lost_penalty: float = -0.1 # Minimal penalty per die lost (for training stability)
 
     # Challenge rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
-    challenge_success_reward: float = 0.1  # Reward for successful challenge (caught bluff) - DISABLED
+    challenge_success_reward: float = 0.2  # Reward for successful challenge (caught bluff) - DISABLED
     challenge_failure_penalty: float = -0.05  # Penalty for unsuccessful challenge that led to dice loss - DISABLED
 
     # Believe rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
-    believe_success_reward: float = 0.1  # Reward for successful believe call (caught bluff) - DISABLED
+    believe_success_reward: float = 0.2  # Reward for successful believe call (caught bluff) - DISABLED
     believe_failure_penalty: float = -0.05  # Penalty for unsuccessful believe call that led to dice loss - DISABLED
 
     # Bid-related rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
@@ -51,13 +51,13 @@ class RewardConfig:
     unsuccessful_bid_penalty: float = -0.1  # Penalty for unsuccessful bid that led to dice loss - DISABLED
 
 
-    round_no_dice_lost_reward: float = 0.0  # Reward for each round in which the agent did not lose a die - DISABLED
-    successful_bluff_reward: float = 0.0  # Reward for successful bluff (bid was correct or never challenged) - DISABLED
+    round_no_dice_lost_reward: float = 0.05  # Reward for each round in which the agent did not lose a die - DISABLED
+    successful_bluff_reward: float = 0.2  # Reward for successful bluff (bid was correct or never challenged) - DISABLED
 
     # Bid defense rewards (DISABLED - set to 0.0 for sparse rewards)
     # When opponent challenges/believes agent's bid and fails
-    defend_bid_reward_challenge: float = 0.01  # Reward for successfully defending bid against challenge - DISABLED
-    defend_bid_reward_believe: float = 0.01  # Reward for successfully defending bid against believe - DISABLED
+    defend_bid_reward_challenge: float = 0.2  # Reward for successfully defending bid against challenge - DISABLED
+    defend_bid_reward_believe: float = 0.2  # Reward for successfully defending bid against believe - DISABLED
 
     # Dice advantage rewards (DISABLED - set to 0.0 for sparse rewards)
     # WARNING: these are given every step and accumulate, can cause reward hacking
@@ -73,21 +73,21 @@ class RewardConfig:
 class TrainingConfig:
     """Training configuration."""
 
-    # PPO parameters (optimized to address critical clip_fraction issue)
+    # PPO parameters (optimized to address explained_variance and approx_kl issues)
     policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
     opponent_device: Optional[str] = "cpu"  
-    learning_rate: float = 4.0e-5  # Reduced for stability with enhanced critic architecture
+    learning_rate: float = 3.0e-4  # Increased from 1.0e-4 for faster learning
     n_steps: int = 8192
-    batch_size: int = 512
-    n_epochs: int = 10  # Reduced to prevent overfitting on batch
+    batch_size: int = 1024  # Increased for Transformer stability: larger batches improve attention mechanism gradients
+    n_epochs: int = 8  # Reduced from 10 to further decrease approx_kl (fewer updates = less aggressive)
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    clip_range: float = 0.01  # Critically reduced to address high clip_fraction
-    ent_coef: float = 0.15  # Slightly increased for better exploration
-    vf_coef: float = 0.5  # Standard value; with enhanced critic architecture (vf=[256, 128]), high coefficient can cause overfitting
-    max_grad_norm: float = 0.5  # Increased for less aggressive gradient clipping
+    clip_range: float = 0.2  # Decreased from 0.3 for more conservative updates
+    ent_coef: float = 0.4  # Increased from 0.15 for more exploration to find winning strategies
+    vf_coef: float = 0.75  # Decreased from 1.2: value loss was too dominant, interfering with policy learning
+    max_grad_norm: float = 0.5  # Critical for Transformer stability: prevents exploding gradients
     
     # Adaptive entropy coefficient parameters
     adaptive_entropy: bool = True  # Enable adaptive entropy coefficient adjustment
@@ -116,6 +116,14 @@ class TrainingConfig:
     log_dir: str = "logs"
     model_dir: str = "models"
     tb_log_name: Optional[str] = None
+
+    # Rule-based opponent configuration
+    use_rule_based_opponents: bool = True  # Use rule-based bots as opponents
+    training_mode: str = "botplay"  # 'selfplay', 'botplay', or 'mixed'
+    bot_difficulty_distribution: Dict[str, float] = field(
+        default_factory=lambda: {"EASY": 0.33, "MEDIUM": 0.34, "HARD": 0.33}
+    )  # Distribution of bot difficulty levels
+    mixed_mode_ratio: float = 0.5  # Ratio of botplay in mixed mode (0.0-1.0)
 
     # Other
     verbose: int = 1

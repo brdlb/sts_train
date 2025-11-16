@@ -37,7 +37,6 @@ class PerudoEnv(gym.Env):
         min_players: int = 3,
         max_players: int = 8,
         reward_config: Optional[RewardConfig] = None,
-        debug_moves: bool = False,
     ):
         """
         Initialize Perudo environment.
@@ -54,7 +53,6 @@ class PerudoEnv(gym.Env):
             min_players: Minimum number of players (used when random_num_players=True)
             max_players: Maximum number of players (used when random_num_players=True)
             reward_config: Reward configuration (uses DEFAULT_CONFIG.reward if not provided)
-            debug_moves: Enable detailed move logging for debugging
         """
         super().__init__()
 
@@ -100,6 +98,8 @@ class PerudoEnv(gym.Env):
             + 1  # current_player
             + self.max_num_players  # palifico
             + 1  # believe
+            + 1  # special_round_active
+            + 1  # round_number
             + 5  # player_dice
         )
         
@@ -175,6 +175,10 @@ class PerudoEnv(gym.Env):
             dice_per_player=self.dice_per_player,
             total_dice_values=self.total_dice_values,
         )
+        
+        # Reset game state with seed to ensure proper randomization of starting player
+        # This is necessary because GameState.__init__() calls reset() without seed
+        self.game_state.reset(seed=seed)
 
         # Set active player
         self.active_player_id = self.game_state.current_player
@@ -304,11 +308,11 @@ class PerudoEnv(gym.Env):
                     # Count bid action (for all players, not just learning agent)
                     self.episode_bid_count += 1
                     self.game_state.next_player()
-                    # Small negative reward for bidding to encourage finishing the round
+                    # calculate_reward now handles bid_small_penalty internally
                     reward += calculate_reward(
                         "bid", False, -1, self.active_player_id, dice_lost=0,
                         reward_config=self.reward_config
-                    ) + self.reward_config.bid_small_penalty
+                    )
             else:
                 # Invalid action - give penalty and pass turn
                 reward = self.reward_config.invalid_action_penalty
@@ -392,6 +396,8 @@ class PerudoEnv(gym.Env):
                     # Reset special round at end of round
                     self.game_state.special_round_active = False
                     self.game_state.special_round_declared_by = None
+                    # Increment round number for new round
+                    self.game_state.round_number += 1
                     self.game_state.roll_dice()
                     # Reset round tracking after dice roll
                     self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
@@ -550,6 +556,8 @@ class PerudoEnv(gym.Env):
                     # Reset special round at end of round
                     self.game_state.special_round_active = False
                     self.game_state.special_round_declared_by = None
+                    # Increment round number for new round
+                    self.game_state.round_number += 1
                     self.game_state.roll_dice()
                     # Reset round tracking after dice roll
                     self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
@@ -632,20 +640,18 @@ class PerudoEnv(gym.Env):
         # Get new observation
         observation = self._get_observation(self.active_player_id)
 
-        # накопление суммарной награды и длины эпизода
-        # ВАЖНО: накапливаем статистику только для learning agent (player_id=0)
-        # В vec_env только learning agent делает ходы через этот метод для сбора статистики
-        # Оппоненты играют отдельно и их награды не должны учитываться в статистике learning agent
-        # Invalid actions now give -1 reward and pass turn (no retry mechanism)
+        # Accumulate total reward and episode length for learning agent
+        # CRITICAL: Only accumulate statistics for learning agent (player_id=0)
+        # In vec_env only learning agent makes moves through this method for statistics collection
+        # Opponents play separately and their rewards should not be counted in learning agent statistics
         if self.active_player_id == 0:
-            # Add any deferred reward for agent (e.g., from successfully defending bid)
-            if self.agent_deferred_reward != 0.0:
-                reward += self.agent_deferred_reward
-                self.agent_deferred_reward = 0.0
+            # NOTE: Deferred rewards are NOT added to reward here to avoid double counting.
+            # They are tracked separately in info["deferred_reward"] and accumulated in RewardManager
+            # via accumulate_deferred_reward() in perudo_vec_env.py.
+            # This ensures deferred rewards are only counted once in the final reward calculation.
             
-            # Add dice advantage reward (includes reward for having more dice than average and being leader)
-            dice_advantage_reward = self._calculate_dice_advantage_reward()
-            reward += dice_advantage_reward
+            # NOTE: dice_advantage_reward is removed to avoid reward inflation
+            # Dice advantage already affects win probability, so explicit reward is not needed
             
             self.episode_reward += reward
             # Only increment episode_length for valid actions
@@ -661,13 +667,23 @@ class PerudoEnv(gym.Env):
         truncated = False  # Not implemented yet
         done = terminated or truncated
         
-        # If episode ended and there's deferred reward for agent, add it to episode reward
-        # (This handles the case where episode ends before agent's next turn)
-        if done and self.agent_deferred_reward != 0.0 and self.active_player_id != 0:
+        # Handle deferred reward for learning agent
+        # Deferred reward is accumulated during opponent turns (e.g., when agent successfully defends bid)
+        # Store it in info dict for RewardManager to accumulate separately and include in final reward calculation
+        # NOTE: Deferred rewards are NOT added to reward here to avoid double counting.
+        # They are tracked separately in RewardManager and added only once in final calculation.
+        deferred_reward_for_info = 0.0
+        if self.active_player_id == 0:
+            # Learning agent's turn - store deferred reward in info for RewardManager to accumulate
+            # RewardManager will accumulate it separately from step rewards via accumulate_deferred_reward()
+            if self.agent_deferred_reward != 0.0:
+                deferred_reward_for_info = self.agent_deferred_reward
+                self.agent_deferred_reward = 0.0  # Reset after storing
+        elif done and self.agent_deferred_reward != 0.0:
             # Episode ended on opponent's turn, but agent had deferred reward
-            # Add it to episode reward directly
-            self.episode_reward += self.agent_deferred_reward
-            self.agent_deferred_reward = 0.0
+            # Store it in info dict for RewardManager to accumulate (will be added to final reward calculation)
+            deferred_reward_for_info = self.agent_deferred_reward
+            self.agent_deferred_reward = 0.0  # Reset after storing
         
         info = {
             "player_id": self.active_player_id,
@@ -677,9 +693,10 @@ class PerudoEnv(gym.Env):
             "game_state": self.game_state.get_public_info(),
             "retry": retry_needed,  # Flag indicating if action needs to be retried
             "invalid_action_attempts": self.invalid_action_attempts,  # Number of invalid attempts
+            "deferred_reward": deferred_reward_for_info,  # Deferred reward for RewardManager
         }
 
-        # если эпизод завершился, сохраняем статистику для realtime
+        # If episode ended, save statistics for monitoring
         # CRITICAL: When used in VecEnv, episode info should be set by VecEnv wrapper, not here
         # This prevents incorrect rewards from being recorded when game ends on opponent's turn
         # VecEnv wrapper (perudo_vec_env.py) will recalculate and set correct reward for learning agent
@@ -738,6 +755,8 @@ class PerudoEnv(gym.Env):
             max_players=self.max_num_players,  # Use max for observation space
             agent_id=player_id,
             num_agents=self.max_num_players,  # Use max for observation space
+            special_round_active=self.game_state.special_round_active,
+            round_number=self.game_state.round_number,
         )
 
         available_actions = PerudoRules.get_available_actions(self.game_state, player_id)
@@ -804,72 +823,40 @@ class PerudoEnv(gym.Env):
                         Used to avoid double penalty when agent's challenge/believe fails
 
         Returns:
-            Round reward (+2.0 if agent didn't lose dice, 0 otherwise)
-            Also handles -1.5 for unsuccessful bid that led to dice loss
+            Round reward (positive if agent didn't lose dice, negative if unsuccessful bid)
         """
-        reward = 0.0
-        agent_id = 0
-
+        LEARNING_AGENT_ID = 0
+        
         # Check if agent (player 0) lost dice in this round
-        agent_lost_dice = (loser_id == agent_id and dice_lost > 0)
-
+        agent_lost_dice_this_round = (loser_id == LEARNING_AGENT_ID and dice_lost > 0)
+        
+        # Early return if agent didn't lose dice and didn't make a bid
+        if not agent_lost_dice_this_round and not self.agent_bid_this_round:
+            # Agent didn't lose dice and didn't make a bid - standard round reward
+            return self.reward_config.round_no_dice_lost_reward
+        
+        reward = 0.0
+        
         # Penalty for unsuccessful bid that led to dice loss
         # (agent made a bid that was successfully challenged by opponent)
-        # Only apply if the current action is NOT agent's challenge/believe
+        # Only apply if the current action is NOT agent's own challenge/believe
         # (because those are already penalized in calculate_reward)
-        if agent_lost_dice and self.agent_bid_this_round:
+        if agent_lost_dice_this_round and self.agent_bid_this_round:
             # Check if this is agent's own challenge/believe (already penalized in calculate_reward)
-            is_agent_action = (action_type in ["challenge", "believe"] and self.active_player_id == agent_id)
-            if not is_agent_action:
+            is_agent_own_action = (
+                action_type in ["challenge", "believe"] and 
+                self.active_player_id == LEARNING_AGENT_ID
+            )
+            if not is_agent_own_action:
                 # Agent's bid was successfully challenged by opponent
                 reward += self.reward_config.unsuccessful_bid_penalty
-
+        
         # Reward for each round in which the agent did not lose a die
-        if not agent_lost_dice:
+        if not agent_lost_dice_this_round:
             reward += self.reward_config.round_no_dice_lost_reward
             
             if self.agent_bid_this_round:
                 # Agent successfully bluffed (bid was correct or never challenged)
                 reward += self.reward_config.successful_bluff_reward
 
-        return reward
-
-    def _calculate_dice_advantage_reward(self) -> float:
-        """
-        Calculate reward for having more dice than average opponents and being leader.
-        
-        Returns:
-            Reward based on dice advantage (configurable per die advantage) plus bonus for being leader
-        """
-        agent_id = 0
-        if agent_id >= len(self.game_state.player_dice_count):
-            return 0.0
-        
-        agent_dice = self.game_state.player_dice_count[agent_id]
-        
-        # Calculate average dice count for opponents (excluding agent)
-        opponent_dice_counts = [
-            count for i, count in enumerate(self.game_state.player_dice_count)
-            if i != agent_id and i < self.num_players
-        ]
-        
-        if not opponent_dice_counts:
-            return 0.0
-        
-        avg_opponent_dice = sum(opponent_dice_counts) / len(opponent_dice_counts)
-        dice_advantage = agent_dice - avg_opponent_dice
-        
-        reward = 0.0
-        
-        # Reward per die advantage (capped at reasonable maximum)
-        if dice_advantage > 0:
-            reward += self.reward_config.dice_advantage_reward * min(dice_advantage, self.reward_config.dice_advantage_max)
-        
-        # Bonus reward for being leader (having more dice than all opponents)
-        if opponent_dice_counts:
-            max_opponent_dice = max(opponent_dice_counts)
-            if agent_dice > max_opponent_dice:
-                # Additional reward for being the leader
-                reward += self.reward_config.leader_bonus
-        
         return reward
