@@ -77,6 +77,19 @@ class PerudoRules:
         return True, ""
 
     @staticmethod
+    def is_initial_bid_required(game_state: GameState) -> bool:
+        """
+        Check if initial bid is required (no current bid exists).
+        
+        Args:
+            game_state: Current game state
+            
+        Returns:
+            True if initial bid is required (current_bid is None), False otherwise
+        """
+        return game_state.current_bid is None
+    
+    @staticmethod
     def can_challenge(game_state: GameState, player_id: int) -> Tuple[bool, str]:
         """
         Check if player can challenge previous player.

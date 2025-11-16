@@ -5,11 +5,14 @@ Each environment represents one table with 4 agents.
 
 import random
 import numpy as np
-from typing import List, Optional, Dict, Tuple, Any, TYPE_CHECKING
+from typing import List, Optional, Dict, Tuple, Any, TYPE_CHECKING, Union
 from gymnasium import spaces
 from stable_baselines3.common.vec_env import VecEnv
 
 from .perudo_env import PerudoEnv
+from .opponent_manager import OpponentManager
+from .debug_logger import DebugLogger
+from .game_controller import GameController
 
 # Lazy import to avoid circular dependency
 if TYPE_CHECKING:
@@ -24,15 +27,11 @@ except ImportError:
     OpponentPool = None  # type: ignore
 
 try:
-    from ..training.config import RewardConfig, DEFAULT_CONFIG
+    from ..training.config import RewardConfig, DEFAULT_CONFIG, EnvironmentConfig
 except ImportError:
     RewardConfig = None  # type: ignore
     DEFAULT_CONFIG = None  # type: ignore
-
-try:
-    from ..utils.helpers import calculate_reward
-except ImportError:
-    calculate_reward = None  # type: ignore
+    EnvironmentConfig = None  # type: ignore
 
 
 class PerudoMultiAgentVecEnv(VecEnv):
@@ -54,11 +53,13 @@ class PerudoMultiAgentVecEnv(VecEnv):
         max_history_length: Optional[int] = None,
         opponent_pool: Optional[Any] = None,  # OpponentPool type
         current_model: Optional[PPO] = None,
-        random_num_players: bool = True,
+        random_num_players: bool = False,
         min_players: int = 3,
         max_players: int = 8,
         reward_config: Optional[Any] = None,  # RewardConfig type
-        debug_moves: bool = False,
+        use_bot_opponents: bool = True,  # If True, use rule-based bots instead of RL agents
+        bot_personalities: Optional[List[str]] = None,  # List of bot personality names to use
+        bot_personality_tracker: Optional[Any] = None,  # BotPersonalityTracker type
     ):
         """
         Initialize vectorized environment.
@@ -77,7 +78,6 @@ class PerudoMultiAgentVecEnv(VecEnv):
             min_players: Minimum number of players (used when random_num_players=True)
             max_players: Maximum number of players (used when random_num_players=True)
             reward_config: Reward configuration (uses DEFAULT_CONFIG.reward if not provided)
-            debug_moves: Enable detailed move logging for debugging
         """
         self.num_envs = num_envs
         self.random_num_players = random_num_players
@@ -112,21 +112,28 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 max_players=max_players,
                 max_history_length=max_history_length,  # Use provided max_history_length
                 reward_config=reward_config,
-                debug_moves=debug_moves,
             )
             self.envs.append(env)
 
-        # Opponent models for each environment
-        # Initialize with maximum size (7 opponents for 8 players max, agent 0 is learning agent)
-        # Actual number of opponents will vary based on actual number of players in each episode
-        self.opponent_models: List[List[Optional[PPO]]] = [
-            [None] * (self.max_num_players - 1) for _ in range(num_envs)
-        ]
-
-        # Opponent paths for each environment (to track which snapshot was used)
-        self.opponent_paths: List[List[Optional[str]]] = [
-            [None] * (self.max_num_players - 1) for _ in range(num_envs)
-        ]
+        # Initialize OpponentManager
+        self.opponent_manager = OpponentManager(
+            use_bot_opponents=use_bot_opponents,
+            bot_personalities=bot_personalities,
+            bot_personality_tracker=bot_personality_tracker,
+            opponent_pool=opponent_pool,
+            current_model=current_model,
+        )
+        self.opponent_manager.initialize_for_envs(num_envs, self.max_num_players - 1)
+        
+        # Keep for backward compatibility (accessed by OpponentManager internally)
+        self.use_bot_opponents = use_bot_opponents
+        self.bot_personalities = bot_personalities
+        self.bot_personality_tracker = bot_personality_tracker
+        
+        # Expose opponent storage for compatibility
+        self.opponent_models = self.opponent_manager.opponent_models
+        self.opponent_bots = self.opponent_manager.opponent_bots
+        self.opponent_paths = self.opponent_manager.opponent_paths
 
         # Current player for each environment
         self.current_players: List[int] = [0] * num_envs
@@ -168,6 +175,12 @@ class PerudoMultiAgentVecEnv(VecEnv):
         # Store last observations for action_masks() method (required by MaskablePPO)
         self.last_obs: Optional[Dict[str, np.ndarray]] = None
         
+        # Initialize DebugLogger (use config from first environment)
+        environment_config = getattr(self.envs[0], 'environment_config', None) if self.envs else None
+        if environment_config is None and DEFAULT_CONFIG is not None:
+            environment_config = DEFAULT_CONFIG.environment
+        self.debug_logger = DebugLogger(environment_config.debug if environment_config else None)
+        
         # Debug mode flag (will be set from training script)
         self.debug_mode = None
 
@@ -200,12 +213,14 @@ class PerudoMultiAgentVecEnv(VecEnv):
             if options[i] is not None and "opponent_snapshot_ids" in options[i]:
                 opponent_snapshot_ids = options[i]["opponent_snapshot_ids"]
             
-            # Sample opponents from pool for this environment
-            # Number of opponents = actual_num_players - 1 (agent 0 is learning agent)
-            if self.opponent_pool is not None:
-                self._sample_opponents_for_env(
-                    i, current_step, actual_num_players, opponent_snapshot_ids
-                )
+            # Create opponents for this environment using OpponentManager
+            self.all_agents_learn_mode[i] = self.opponent_manager.create_opponents_for_env(
+                env_idx=i,
+                env=env,
+                num_players=actual_num_players,
+                current_step=current_step,
+                opponent_snapshot_ids=opponent_snapshot_ids,
+            )
             
             self.current_players[i] = env.game_state.current_player
             self.active_agent_ids[i] = self.current_players[i]
@@ -230,90 +245,58 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 while self.active_agent_ids[i] != 0 and steps < max_steps:
                     steps += 1
                     
-                    # CRITICAL: Skip players with no dice - they have already lost and cannot make moves
-                    # Use next_player() which automatically skips players with 0 dice
-                    if env.game_state.player_dice_count[self.active_agent_ids[i]] == 0:
-                        env.game_state.next_player()
-                        self.active_agent_ids[i] = env.game_state.current_player
-                        self.current_players[i] = env.game_state.current_player
-                        # Check if game ended after skipping players
-                        if env.game_state.game_over:
-                            # Game ended, reset again
-                            obs, info = env.reset(seed=seeds[i], options=options[i])
-                            self.active_agent_ids[i] = env.game_state.current_player
-                            self.current_players[i] = env.game_state.current_player
-                            steps = 0  # Start over
+                    # CRITICAL: Skip players with no dice - use GameController
+                    if not env.game_state.is_player_active(self.active_agent_ids[i]):
+                        try:
+                            next_player = env.game_controller.skip_to_next_active_player(
+                                env.game_state, self.active_agent_ids[i]
+                            )
+                            self.active_agent_ids[i] = next_player
+                            self.current_players[i] = next_player
+                            env.game_state.current_player = next_player
+                            # Check if game ended after skipping players
+                            if env.game_state.game_over:
+                                # Game ended, reset again
+                                obs, info = env.reset(seed=seeds[i], options=options[i])
+                                self.active_agent_ids[i] = env.game_state.current_player
+                                self.current_players[i] = env.game_state.current_player
+                                steps = 0  # Start over
+                                continue
                             continue
-                        continue
+                        except ValueError:
+                            # No active players - game should be over
+                            env.game_state._check_game_over()
+                            continue
                     
                     # Opponent's turn
                     opponent_idx = self.active_agent_ids[i] - 1
-                    # Only use opponent model if opponent_idx is within bounds
-                    if opponent_idx < len(self.opponent_models[i]):
-                        opponent_model = self.opponent_models[i][opponent_idx]
-                    else:
-                        opponent_model = None
-
-                    if opponent_model is not None:
+                    # Only use opponent if opponent_idx is within bounds
+                    if opponent_idx < len(self.opponent_models[i]) or (self.use_bot_opponents and opponent_idx < len(self.opponent_bots[i])):
                         obs_for_opp = env.get_observation_for_player(self.active_agent_ids[i])
+                        action = self.opponent_manager.get_opponent_action(
+                            i, opponent_idx, obs_for_opp, deterministic=False
+                        )
                         
-                        # Handle both dict and array observations
-                        if isinstance(obs_for_opp, dict):
-                            obs_for_predict = {key: np.array([value]) for key, value in obs_for_opp.items()}
-                            
-                            # Extract action mask if available and pass it to predict()
-                            action_masks = None
-                            if "action_mask" in obs_for_opp:
-                                mask = obs_for_opp["action_mask"]
-                                if isinstance(mask, np.ndarray):
-                                    mask = mask.astype(bool)
-                                    if mask.ndim > 1:
-                                        mask = mask.flatten()
-                                    action_masks = np.array([mask])
-                                elif isinstance(mask, (list, tuple)):
-                                    mask = np.array(mask, dtype=bool)
-                                    if mask.ndim > 1:
-                                        mask = mask.flatten()
-                                    action_masks = np.array([mask])
-                            
-                            # Predict with action mask if available
-                            if action_masks is not None:
-                                action, _ = opponent_model.predict(obs_for_predict, deterministic=False, action_masks=action_masks)
-                            else:
-                                action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
-                        else:
-                            obs_for_predict = obs_for_opp.reshape(1, -1)
-                            action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
-                        action = int(action[0])
+                        # Force initial bid if needed (using GameController)
+                        action, _ = env.game_controller.force_initial_bid_if_needed(
+                            env.game_state, self.active_agent_ids[i], action, env.max_quantity
+                        )
                         
                         env.set_active_player(self.active_agent_ids[i])
                         obs_for_opp, _, terminated, opp_truncated, opp_info = env.step(action)
                         
-                        # Debug mode: print opponent's move during reset
+                        # Debug mode: log opponent's move during reset
                         if self.debug_mode is not None and self.debug_mode.is_set():
-                            try:
-                                from ..utils.helpers import action_to_bid
-                                action_type, param1, param2 = action_to_bid(action, env.max_quantity)
-                                
-                                player_name = f"Player {self.active_agent_ids[i]}"
-                                if action_type == "bid":
-                                    move_str = f"{player_name}: BID {param1}x{param2}"
-                                elif action_type == "challenge":
-                                    move_str = f"{player_name}: CHALLENGE"
-                                elif action_type == "believe":
-                                    move_str = f"{player_name}: BELIEVE"
-                                else:
-                                    move_str = f"{player_name}: {action_type}"
-                                
-                                # Show current game state
-                                current_bid = env.game_state.current_bid
-                                bid_str = f"{current_bid[0]}x{current_bid[1]}" if current_bid else "none"
-                                dice_str = str(list(env.game_state.player_dice_count))
-                                
-                                print(f"[DEBUG] {move_str} | Current bid: {bid_str} | Dice: {dice_str}")
-                            except Exception:
-                                # Silently ignore errors to prevent crashes
-                                pass
+                            from ..utils.helpers import action_to_bid
+                            action_type, param1, param2 = action_to_bid(action, env.max_quantity)
+                            self.debug_logger.log_action(
+                                self.active_agent_ids[i],
+                                action_type,
+                                {"param1": param1, "param2": param2},
+                                env.game_state,
+                                env.max_quantity
+                            )
+                            self.debug_logger.wait_for_input()
                         
                         if terminated or opp_truncated:
                             # Если игра завершилась до хода learning agent, эпизод будет обработан
@@ -360,116 +343,6 @@ class PerudoMultiAgentVecEnv(VecEnv):
             self.last_obs = observations_array
             return observations_array
 
-    def _sample_opponents_for_env(
-        self,
-        env_idx: int,
-        current_step: int = 0,
-        num_players: Optional[int] = None,
-        opponent_snapshot_ids: Optional[List[Optional[str]]] = None,
-    ):
-        """
-        Sample opponents from pool for a specific environment.
-        
-        If snapshots exist in the pool, only unique snapshots are added to the room.
-        Remaining opponent slots use the current model (self-play), just like in the first iteration.
-        
-        Args:
-            env_idx: Environment index
-            current_step: Current training step
-            num_players: Actual number of players for this episode (if None, uses max)
-            opponent_snapshot_ids: Optional list of snapshot IDs to use for each opponent.
-                                 If provided, must have length >= num_players - 1.
-                                 Use None in list for random sampling for that opponent.
-        """
-        if self.opponent_pool is None:
-            # If no opponent pool, all agents learn
-            self.all_agents_learn_mode[env_idx] = True
-            return
-
-        # Use actual number of players if provided, otherwise use max
-        if num_players is None:
-            num_players = self.max_num_players
-
-        # Number of opponent slots (agents 1, 2, ..., num_players-1)
-        num_opponents = num_players - 1
-
-        # Check if pool has snapshots
-        if not self.opponent_pool.snapshots:
-            # Pool is empty, all opponents use current model (self-play)
-            for opp_idx in range(1, num_players):
-                self.opponent_models[env_idx][opp_idx - 1] = self.current_model
-                self.opponent_paths[env_idx][opp_idx - 1] = None
-            self.all_agents_learn_mode[env_idx] = True
-            return
-
-        # Get list of available unique snapshot IDs from pool
-        available_snapshot_ids = list(self.opponent_pool.snapshots.keys())
-        
-        # If specific snapshot IDs are provided, use them (but still ensure uniqueness)
-        if opponent_snapshot_ids is not None:
-            # Filter out None values and ensure uniqueness
-            unique_snapshot_ids = []
-            seen_ids = set()
-            for snap_id in opponent_snapshot_ids:
-                if snap_id is not None and snap_id not in seen_ids and snap_id in available_snapshot_ids:
-                    unique_snapshot_ids.append(snap_id)
-                    seen_ids.add(snap_id)
-        else:
-            # Sample unique snapshots from pool (without replacement)
-            # Shuffle to get random selection
-            shuffled_ids = available_snapshot_ids.copy()
-            random.shuffle(shuffled_ids)
-            # Take at most num_opponents unique snapshots
-            unique_snapshot_ids = shuffled_ids[:num_opponents]
-
-        # Assign unique snapshots to opponent slots
-        # First, assign unique snapshots to available slots
-        num_unique_snapshots = len(unique_snapshot_ids)
-        for slot_idx, snapshot_id in enumerate(unique_snapshot_ids):
-            if slot_idx >= num_opponents:
-                break  # No more opponent slots
-            
-            opponent_path = self.opponent_pool.get_snapshot_by_id(snapshot_id)
-            if opponent_path and self.envs[env_idx] is not None:
-                # Load opponent model
-                try:
-                    opponent_model = self.opponent_pool.load_snapshot(
-                        opponent_path, self.envs[env_idx]
-                    )
-                    if opponent_model is not None:
-                        # opp_idx = slot_idx + 1 (because agents are 1-indexed)
-                        self.opponent_models[env_idx][slot_idx] = opponent_model
-                        self.opponent_paths[env_idx][slot_idx] = opponent_path
-                        # Update last used timestamp
-                        if snapshot_id in self.opponent_pool.snapshots:
-                            self.opponent_pool.snapshots[snapshot_id].last_used = current_step
-                    else:
-                        # Failed to load snapshot, use current model instead
-                        self.opponent_models[env_idx][slot_idx] = self.current_model
-                        self.opponent_paths[env_idx][slot_idx] = None
-                except Exception as e:
-                    # Failed to load snapshot, use current model instead
-                    print(f"Warning: Failed to load opponent snapshot {opponent_path}: {e}")
-                    self.opponent_models[env_idx][slot_idx] = self.current_model
-                    self.opponent_paths[env_idx][slot_idx] = None
-            else:
-                # No snapshot path found, use current model
-                self.opponent_models[env_idx][slot_idx] = self.current_model
-                self.opponent_paths[env_idx][slot_idx] = None
-
-        # Fill remaining slots with current model (self-play)
-        for slot_idx in range(num_unique_snapshots, num_opponents):
-            self.opponent_models[env_idx][slot_idx] = self.current_model
-            self.opponent_paths[env_idx][slot_idx] = None
-
-        # If pool had snapshots but we used them all, we still have some snapshots in the room
-        # So we don't enable all_agents_learn_mode
-        # But if all slots use current_model, enable all_agents_learn_mode
-        all_use_current_model = all(
-            self.opponent_models[env_idx][i] == self.current_model
-            for i in range(num_opponents)
-        )
-        self.all_agents_learn_mode[env_idx] = all_use_current_model
 
     def step_async(self, actions: np.ndarray) -> None:
         """
@@ -480,34 +353,6 @@ class PerudoMultiAgentVecEnv(VecEnv):
         """
         self._actions = actions
 
-    def _calculate_final_reward(self, env, learning_agent_id: int, accumulated_reward: float, reward_config: Optional[Any]) -> float:
-        """
-        Calculate final reward for learning agent at episode end.
-        
-        Args:
-            env: Environment instance
-            learning_agent_id: ID of learning agent (usually 0)
-            accumulated_reward: Accumulated reward during episode
-            reward_config: Reward configuration
-            
-        Returns:
-            Final reward including win/lose bonuses
-        """
-        if reward_config is None:
-            return accumulated_reward
-        
-        winner = env.game_state.winner if hasattr(env.game_state, "winner") and env.game_state.winner is not None else -1
-        
-        if winner == learning_agent_id:
-            final_reward = accumulated_reward + reward_config.win_reward
-            if winner >= 0 and winner < len(env.game_state.player_dice_count):
-                winner_dice_count = env.game_state.player_dice_count[winner]
-                if winner_dice_count is not None and reward_config.win_dice_bonus > 0:
-                    final_reward += reward_config.win_dice_bonus * winner_dice_count
-        else:
-            final_reward = accumulated_reward + reward_config.lose_penalty
-        
-        return final_reward
 
     def step_wait(self):
         """
@@ -528,6 +373,9 @@ class PerudoMultiAgentVecEnv(VecEnv):
             reward = 0.0
             obs = None
             info = {}
+            # Initialize flag to track if results were already added for this environment
+            # This prevents duplicate results when learning agent is eliminated
+            results_already_added = False
 
             # ===== ПРОВЕРКА: ЕСЛИ ЭПИЗОД УЖЕ ЗАВЕРШЕН, АВТОМАТИЧЕСКИ ВЫЗВАТЬ RESET =====
             if self.episode_already_done[i]:
@@ -542,7 +390,13 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 
                 # Sample opponents from pool for this environment
                 if self.opponent_pool is not None:
-                    self._sample_opponents_for_env(i, self.current_step, actual_num_players)
+                    self.all_agents_learn_mode[i] = self.opponent_manager.create_opponents_for_env(
+                        env_idx=i,
+                        env=env,
+                        num_players=actual_num_players,
+                        current_step=self.current_step,
+                        opponent_snapshot_ids=None,
+                    )
                 
                 self.current_players[i] = env.game_state.current_player
                 self.active_agent_ids[i] = self.current_players[i]
@@ -565,72 +419,58 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         while self.active_agent_ids[i] != 0 and steps < max_steps:
                             steps += 1
                         
-                            # Skip players with no dice - they can't make moves
-                            if env.game_state.player_dice_count[self.active_agent_ids[i]] == 0:
-                                # Use next_player() which automatically skips players with 0 dice
-                                env.game_state.next_player()
-                                self.active_agent_ids[i] = env.game_state.current_player
-                                self.current_players[i] = env.game_state.current_player
-                                # Check if game ended after skipping players
-                                if env.game_state.game_over:
-                                    # Game ended, reset again
-                                    obs, info = env.reset()
-                                    # Re-sample opponents after reset
-                                    if self.opponent_pool is not None:
-                                        self._sample_opponents_for_env(i, self.current_step, env.num_players)
-                                    self.active_agent_ids[i] = env.game_state.current_player
-                                    self.current_players[i] = env.game_state.current_player
-                                    # Reset learning agent episode statistics
-                                    self.learning_agent_episode_reward[i] = 0.0
-                                    self.learning_agent_episode_length[i] = 0
-                                    # Reset all agents episode statistics
-                                    self.all_agents_episode_reward[i] = {}
-                                    self.all_agents_episode_length[i] = {}
-                                    # Reset VecMonitor accumulated reward tracker
-                                    self.vecmonitor_accumulated_reward[i] = 0.0
-                                    steps = 0  # Start over
+                            # Skip players with no dice - use GameController
+                            if not env.game_state.is_player_active(self.active_agent_ids[i]):
+                                try:
+                                    next_player = env.game_controller.skip_to_next_active_player(
+                                        env.game_state, self.active_agent_ids[i]
+                                    )
+                                    self.active_agent_ids[i] = next_player
+                                    self.current_players[i] = next_player
+                                    env.game_state.current_player = next_player
+                                    # Check if game ended after skipping players
+                                    if env.game_state.game_over:
+                                        # Game ended, reset again
+                                        obs, info = env.reset()
+                                        # Re-create opponents after reset
+                                        self.all_agents_learn_mode[i] = self.opponent_manager.create_opponents_for_env(
+                                            env_idx=i,
+                                            env=env,
+                                            num_players=env.num_players,
+                                            current_step=self.current_step,
+                                            opponent_snapshot_ids=None,
+                                        )
+                                        self.active_agent_ids[i] = env.game_state.current_player
+                                        self.current_players[i] = env.game_state.current_player
+                                        # Reset learning agent episode statistics
+                                        self.learning_agent_episode_reward[i] = 0.0
+                                        self.learning_agent_episode_length[i] = 0
+                                        # Reset all agents episode statistics
+                                        self.all_agents_episode_reward[i] = {}
+                                        self.all_agents_episode_length[i] = {}
+                                        # Reset VecMonitor accumulated reward tracker
+                                        self.vecmonitor_accumulated_reward[i] = 0.0
+                                        steps = 0  # Start over
+                                        continue
                                     continue
-                                continue
+                                except ValueError:
+                                    # No active players - game should be over
+                                    env.game_state._check_game_over()
+                                    continue
                             
                             # Opponent's turn
                             opponent_idx = self.active_agent_ids[i] - 1
-                            # Only use opponent model if opponent_idx is within bounds
-                            if opponent_idx < len(self.opponent_models[i]):
-                                opponent_model = self.opponent_models[i][opponent_idx]
-                            else:
-                                opponent_model = None
-                            
-                            if opponent_model is not None:
+                            # Only use opponent if opponent_idx is within bounds
+                            if opponent_idx < len(self.opponent_models[i]) or (self.use_bot_opponents and opponent_idx < len(self.opponent_bots[i])):
                                 obs_for_opp = env.get_observation_for_player(self.active_agent_ids[i])
+                                action = self.opponent_manager.get_opponent_action(
+                                    i, opponent_idx, obs_for_opp, deterministic=False
+                                )
                                 
-                                # Handle both dict and array observations
-                                if isinstance(obs_for_opp, dict):
-                                    obs_for_predict = {key: np.array([value]) for key, value in obs_for_opp.items()}
-                                    
-                                    # Extract action mask if available and pass it to predict()
-                                    action_masks = None
-                                    if "action_mask" in obs_for_opp:
-                                        mask = obs_for_opp["action_mask"]
-                                        if isinstance(mask, np.ndarray):
-                                            mask = mask.astype(bool)
-                                            if mask.ndim > 1:
-                                                mask = mask.flatten()
-                                            action_masks = np.array([mask])
-                                        elif isinstance(mask, (list, tuple)):
-                                            mask = np.array(mask, dtype=bool)
-                                            if mask.ndim > 1:
-                                                mask = mask.flatten()
-                                            action_masks = np.array([mask])
-                                    
-                                    # Predict with action mask if available
-                                    if action_masks is not None:
-                                        action, _ = opponent_model.predict(obs_for_predict, deterministic=False, action_masks=action_masks)
-                                    else:
-                                        action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
-                                else:
-                                    obs_for_predict = obs_for_opp.reshape(1, -1)
-                                    action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
-                                action = int(action[0])
+                                # Force initial bid if needed (using GameController)
+                                action, _ = env.game_controller.force_initial_bid_if_needed(
+                                    env.game_state, self.active_agent_ids[i], action, env.max_quantity
+                                )
                                 
                                 env.set_active_player(self.active_agent_ids[i])
                                 obs_for_opp, _, terminated, opp_truncated, opp_info = env.step(action)
@@ -657,6 +497,12 @@ class PerudoMultiAgentVecEnv(VecEnv):
                                         dice_str = str(list(env.game_state.player_dice_count))
                                         
                                         print(f"[DEBUG] {move_str} | Current bid: {bid_str} | Dice: {dice_str}")
+                                        # Pause and wait for Enter key
+                                        try:
+                                            input("Press Enter to continue...")
+                                        except (EOFError, KeyboardInterrupt):
+                                            # Handle case where stdin is not available or user cancels
+                                            pass
                                     except Exception:
                                         # Silently ignore errors to prevent crashes
                                         pass
@@ -666,7 +512,13 @@ class PerudoMultiAgentVecEnv(VecEnv):
                                     obs, info = env.reset()
                                     # Re-sample opponents after reset
                                     if self.opponent_pool is not None:
-                                        self._sample_opponents_for_env(i, self.current_step, env.num_players)
+                                        self.all_agents_learn_mode[i] = self.opponent_manager.create_opponents_for_env(
+                                            env_idx=i,
+                                            env=env,
+                                            num_players=env.num_players,
+                                            current_step=self.current_step,
+                                            opponent_snapshot_ids=None,
+                                        )
                                     self.active_agent_ids[i] = env.game_state.current_player
                                     self.current_players[i] = env.game_state.current_player
                                     # Reset learning agent episode statistics
@@ -719,17 +571,46 @@ class PerudoMultiAgentVecEnv(VecEnv):
             # In all_learn mode: current active agent learns
             current_learning_agent = self.active_agent_ids[i] if all_learn else 0
             
-            # Check if learning agent has dice - if not, skip to next player
+            # Note: results_already_added is initialized at the start of the loop for this environment
+            # This ensures it persists across multiple checks of learning agent in the same step_wait() call
+            
+            # Debug: log state before learning agent's turn
+            if self.debug_mode is not None and self.debug_mode.is_set():
+                print(f"[DEBUG] Learning agent turn check: agent={current_learning_agent}, dice={env.game_state.player_dice_count[current_learning_agent]}, current_player={env.game_state.current_player}, game_over={env.game_state.game_over}")
+            
+            # CRITICAL: Check if learning agent has dice - if not, skip to opponents
+            # Also check if it's actually learning agent's turn
             if env.game_state.player_dice_count[current_learning_agent] == 0:
-                # Learning agent has no dice, skip to next player
-                env.game_state.next_player()
-                self.current_players[i] = env.game_state.current_player
-                self.active_agent_ids[i] = self.current_players[i]
-                # Update current learning agent
-                if all_learn:
-                    current_learning_agent = self.active_agent_ids[i]
-                # Check if game ended after skipping
-                if env.game_state.game_over:
+                # Learning agent has no dice - they are eliminated
+                # If it's not learning agent's turn, skip directly to opponents
+                if env.game_state.current_player != current_learning_agent:
+                    if self.debug_mode is not None and self.debug_mode.is_set():
+                        print(f"[DEBUG] Learning agent has no dice and it's not their turn (current_player={env.game_state.current_player}). Skipping to opponents.")
+                    # Skip to opponent turns section
+                    # Don't try to get action from eliminated learning agent
+                    done = False
+                    obs = env.get_observation_for_player(current_learning_agent)
+                    observations_list.append(obs)
+                    rewards.append(0.0)
+                    dones.append(done)
+                    infos.append({"error": "Learning agent eliminated, skipping to opponents"})
+                    results_already_added = True
+                    # Continue to opponent turns below - skip rest of learning agent section
+                    # Skip the game_over check since we already added results
+                    # Also skip the rest of learning agent processing since results are already added
+                    # Go directly to opponent turns (ШАГ 2)
+                else:
+                    # It's learning agent's turn but they have no dice - skip to next player
+                    # Learning agent has no dice - they are eliminated
+                    # Skip to next player with dice
+                    env.game_state.next_player()
+                    self.current_players[i] = env.game_state.current_player
+                    self.active_agent_ids[i] = self.current_players[i]
+                
+                # CRITICAL: Check if game ended after skipping learning agent
+                # If only one player (or no players) remains, game is over
+                # But skip if we already added results (when it wasn't learning agent's turn)
+                if not results_already_added and env.game_state.game_over:
                     done = True
                     self.episode_already_done[i] = True
                     # Get observation for learning agent (even though they have no dice)
@@ -758,7 +639,9 @@ class PerudoMultiAgentVecEnv(VecEnv):
                     
                     # Calculate final reward using accumulated reward
                     accumulated_reward = self.vecmonitor_accumulated_reward[i]
-                    final_reward = self._calculate_final_reward(env, learning_agent_id, accumulated_reward, reward_config)
+                    final_reward = env.reward_calculator.calculate_final_reward(
+                        env.game_state, learning_agent_id, accumulated_reward
+                    )
                     
                     # Get episode length
                     if all_learn:
@@ -771,6 +654,12 @@ class PerudoMultiAgentVecEnv(VecEnv):
                     win_status = "WIN" if learning_agent_won else "DEFEAT"
                     dice_str = str(list(env.game_state.player_dice_count))
                     print(f"{win_status} | reward: {final_reward:.2f} | stats: bids={bid_count}, challenges={challenge_count}, believe={believe_count}, invalid={invalid_action_count} | dice: {dice_str}")
+                    
+                    # Update bot personality statistics if using bot opponents
+                    if self.use_bot_opponents and self.bot_personality_tracker is not None:
+                        self.opponent_manager.update_opponent_statistics(
+                            i, winner, env.num_players
+                        )
                     
                     # Calculate step_reward for VecMonitor (difference between final and accumulated)
                     step_reward = final_reward - accumulated_reward
@@ -798,110 +687,175 @@ class PerudoMultiAgentVecEnv(VecEnv):
                     infos.append(info)
                     # Reset VecMonitor accumulated reward tracker for next episode
                     self.vecmonitor_accumulated_reward[i] = 0.0
-                    continue
+                    continue  # Skip rest of loop - results already added
+                
+                # CRITICAL: If learning agent has no dice but game is not over,
+                # we should NOT try to get action from learning agent
+                # Instead, jump directly to opponent turns (which happens after learning agent's turn)
+                # Set done flag to prevent requesting action from model
+                # The code will continue to opponent turns section below
+                # Skip getting action and executing for learning agent
             
-            # Get action: use PPO action for agent 0, or for current agent in all_learn mode
-            if current_learning_agent == 0:
-                # Use action from PPO (provided by step_async)
-                # MaskablePPO automatically uses action_masks() method during training
-                action = int(self._actions[i])
-            else:
-                # In all_learn mode, get action from current model using predict
-                # This allows all agents to learn, but we still collect experience
-                obs_for_agent = env.get_observation_for_player(current_learning_agent)
-                if isinstance(obs_for_agent, dict):
-                    obs_for_predict = {key: np.array([value]) for key, value in obs_for_agent.items()}
+            # CRITICAL: Only get action if learning agent still has dice
+            # If we reached here and learning agent has no dice, skip to opponent turns
+            # Note: results_already_added is already initialized above
+            # But check if results were already added (e.g., when learning agent was eliminated earlier)
+            if not results_already_added and env.game_state.player_dice_count[current_learning_agent] == 0:
+                # This should not happen due to check above, but add safety check
+                # Skip learning agent's turn and go directly to opponent turns
+                done = False
+                obs = env.get_observation_for_player(current_learning_agent)
+                observations_list.append(obs)
+                rewards.append(0.0)
+                dones.append(done)
+                infos.append({"error": "Learning agent has no dice"})
+                results_already_added = True  # Mark that results are already added
+                # Continue to opponent turns below (skip action execution)
+                # NOTE: Results already added, will skip adding again at end of loop
+            
+            # CRITICAL: Only get action and execute if results were not already added
+            # This prevents duplicate results when learning agent is eliminated
+            if not results_already_added:
+                # Get action: use PPO action for agent 0, or for current agent in all_learn mode
+                if current_learning_agent == 0:
+                    # Use action from PPO (provided by step_async)
+                    # MaskablePPO automatically uses action_masks() method during training
+                    action = int(self._actions[i])
                     
-                    # Extract action mask if available and pass it to predict()
-                    action_masks = None
-                    if "action_mask" in obs_for_agent:
-                        mask = obs_for_agent["action_mask"]
-                        if isinstance(mask, np.ndarray):
-                            mask = mask.astype(bool)
-                            if mask.ndim > 1:
-                                mask = mask.flatten()
-                            action_masks = np.array([mask])
-                        elif isinstance(mask, (list, tuple)):
-                            mask = np.array(mask, dtype=bool)
-                            if mask.ndim > 1:
-                                mask = mask.flatten()
-                            action_masks = np.array([mask])
-                    
-                    # Predict with action mask if available
-                    if action_masks is not None:
-                        action, _ = self.current_model.predict(obs_for_predict, deterministic=False, action_masks=action_masks)
-                    else:
-                        action, _ = self.current_model.predict(obs_for_predict, deterministic=False)
+                    # Force initial bid if needed (using GameController)
+                    action, _ = env.game_controller.force_initial_bid_if_needed(
+                        env.game_state, current_learning_agent, action, env.max_quantity
+                    )
                 else:
-                    obs_for_predict = obs_for_agent.reshape(1, -1)
-                    action, _ = self.current_model.predict(obs_for_predict, deterministic=False)
-                action = int(action[0])
-            
-            env.set_active_player(current_learning_agent)
+                    # In all_learn mode, get action from current model using predict
+                    # This allows all agents to learn, but we still collect experience
+                    obs_for_agent = env.get_observation_for_player(current_learning_agent)
+                    if isinstance(obs_for_agent, dict):
+                        obs_for_predict = {key: np.array([value]) for key, value in obs_for_agent.items()}
+                        
+                        # Extract action mask if available and pass it to predict()
+                        action_masks = None
+                        if "action_mask" in obs_for_agent:
+                            mask = obs_for_agent["action_mask"]
+                            if isinstance(mask, np.ndarray):
+                                mask = mask.astype(bool)
+                                if mask.ndim > 1:
+                                    mask = mask.flatten()
+                                action_masks = np.array([mask])
+                            elif isinstance(mask, (list, tuple)):
+                                mask = np.array(mask, dtype=bool)
+                                if mask.ndim > 1:
+                                    mask = mask.flatten()
+                                action_masks = np.array([mask])
+                        
+                        # Predict with action mask if available
+                        if action_masks is not None:
+                            action, _ = self.current_model.predict(obs_for_predict, deterministic=False, action_masks=action_masks)
+                        else:
+                            action, _ = self.current_model.predict(obs_for_predict, deterministic=False)
+                    else:
+                        obs_for_predict = obs_for_agent.reshape(1, -1)
+                        action, _ = self.current_model.predict(obs_for_predict, deterministic=False)
+                    action = int(action[0])
+                
+                env.set_active_player(current_learning_agent)
 
-            # Execute action (invalid actions now give -1 reward and pass turn, no retry)
-            obs, reward, terminated, truncated_flag, info = env.step(action)
-            done = terminated or truncated_flag
-
-            # Get action validity from info to only count valid actions in episode_length
-            action_valid = info.get("action_info", {}).get("action_valid", True)
-            
-            # Debug mode: print every move
-            if self.debug_mode is not None and self.debug_mode.is_set():
-                try:
+                # Debug mode: log BEFORE action execution
+                if self.debug_mode is not None and self.debug_mode.is_set():
                     from ..utils.helpers import action_to_bid
                     action_type, param1, param2 = action_to_bid(action, env.max_quantity)
-                    
-                    player_name = f"Player {current_learning_agent}" if all_learn else "Learning Agent"
-                    if action_type == "bid":
-                        move_str = f"{player_name}: BID {param1}x{param2}"
-                    elif action_type == "challenge":
-                        move_str = f"{player_name}: CHALLENGE"
-                    elif action_type == "believe":
-                        move_str = f"{player_name}: BELIEVE"
-                    else:
-                        move_str = f"{player_name}: {action_type}"
-                    
-                    # Show current game state
-                    current_bid = env.game_state.current_bid
-                    bid_str = f"{current_bid[0]}x{current_bid[1]}" if current_bid else "none"
-                    dice_str = str(list(env.game_state.player_dice_count))
-                    
-                    print(f"[DEBUG] {move_str} | Current bid: {bid_str} | Dice: {dice_str} | Reward: {reward:.2f}")
-                except Exception:
-                    # Silently ignore errors to prevent crashes
-                    pass
-            
-            # Accumulate reward for learning agent during episode
-            # In normal mode: only agent 0 accumulates reward
-            # In all_learn mode: only agent 0 accumulates reward (for VecMonitor compatibility)
-            if current_learning_agent == 0:
-                # Accumulate reward in vecmonitor_accumulated_reward (single source of truth)
-                self.vecmonitor_accumulated_reward[i] += reward
-                
-                # Track episode length for statistics
-                if action_valid:
-                    if all_learn:
-                        if current_learning_agent not in self.all_agents_episode_length[i]:
-                            self.all_agents_episode_length[i][current_learning_agent] = 0
-                        self.all_agents_episode_length[i][current_learning_agent] += 1
-                    else:
-                        self.learning_agent_episode_length[i] += 1
-                
-                if done:
-                    self.episode_already_done[i] = True
-            elif done:
-                # Episode ended on opponent's turn
-                self.episode_already_done[i] = True
+                    self.debug_logger.log_action(
+                        current_learning_agent,
+                        action_type,
+                        {"param1": param1, "param2": param2},
+                        env.game_state,
+                        env.max_quantity
+                    )
 
-            # Update current player
-            self.current_players[i] = env.game_state.current_player
-            self.active_agent_ids[i] = self.current_players[i]
+                # Force initial bid if needed (using GameController)
+                action, was_forced = env.game_controller.force_initial_bid_if_needed(
+                    env.game_state, current_learning_agent, action, env.max_quantity
+                )
+                if was_forced and self.debug_mode is not None and self.debug_mode.is_set():
+                    self.debug_logger.log_action(
+                        current_learning_agent,
+                        "bid",
+                        {"param1": 1, "param2": 2},
+                        env.game_state,
+                        env.max_quantity
+                    )
+
+                # Execute action (invalid actions now give -1 reward and pass turn, no retry)
+                obs, reward, terminated, truncated_flag, info = env.step(action)
+                done = terminated or truncated_flag
+
+                # Get action validity from info to only count valid actions in episode_length
+                action_valid = info.get("action_info", {}).get("action_valid", True)
+                
+                # Debug mode: log AFTER action execution
+                if self.debug_mode is not None and self.debug_mode.is_set():
+                    from ..utils.helpers import action_to_bid
+                    action_type, param1, param2 = action_to_bid(action, env.max_quantity)
+                    self.debug_logger.log_action(
+                        current_learning_agent,
+                        action_type,
+                        {"param1": param1, "param2": param2, "reward": reward},
+                        env.game_state,
+                        env.max_quantity
+                    )
+                    self.debug_logger.wait_for_input()
+                
+                # Accumulate reward for learning agent during episode
+                # In normal mode: only agent 0 accumulates reward
+                # In all_learn mode: only agent 0 accumulates reward (for VecMonitor compatibility)
+                if current_learning_agent == 0:
+                    # Accumulate reward in vecmonitor_accumulated_reward (single source of truth)
+                    self.vecmonitor_accumulated_reward[i] += reward
+                    
+                    # Track episode length for statistics
+                    if action_valid:
+                        if all_learn:
+                            if current_learning_agent not in self.all_agents_episode_length[i]:
+                                self.all_agents_episode_length[i][current_learning_agent] = 0
+                            self.all_agents_episode_length[i][current_learning_agent] += 1
+                        else:
+                            self.learning_agent_episode_length[i] += 1
+                    
+                    if done:
+                        self.episode_already_done[i] = True
+                elif done:
+                    # Episode ended on opponent's turn
+                    self.episode_already_done[i] = True
+
+                # Update current player after learning agent's move
+                self.current_players[i] = env.game_state.current_player
+                self.active_agent_ids[i] = self.current_players[i]
+                
+                # CRITICAL: Check if learning agent lost all dice after their move
+                # If learning agent has no dice, game should end or skip to opponents
+                if env.game_state.player_dice_count[current_learning_agent] == 0:
+                    # Learning agent lost all dice - check if game ended
+                    if env.game_state.game_over:
+                        done = True
+                        self.episode_already_done[i] = True
+                        if self.debug_mode is not None and self.debug_mode.is_set():
+                            print(f"[DEBUG] Learning Agent eliminated (no dice). Game over. Winner: {env.game_state.winner}")
+                    else:
+                        # Game continues, but learning agent is eliminated
+                        # Skip to opponent turns (they will continue playing)
+                        if self.debug_mode is not None and self.debug_mode.is_set():
+                            print(f"[DEBUG] Learning Agent eliminated (no dice). Game continues with opponents.")
+                    # CRITICAL: Don't set results_already_added here because results need to be added
+                    # at the end of this iteration (lines 1408-1410). The flag will prevent duplicate
+                    # results if learning agent is checked again, but since we're still in the same
+                    # iteration, results_already_added should remain False so results are added once.
 
             # ===== ШАГ 2: ТЕПЕРЬ ОППОНЕНТЫ ХОДЯТ, ПОКА СНОВА НЕ НАСТАНЕТ ХОД LEARNING AGENT =====
             # In all_learn mode, we don't need to advance to next learning agent
             # because all agents are learning and we collect experience from all of them
-            if not all_learn:
+            # CRITICAL: Only continue with opponents if learning agent still has dice
+            # If learning agent has no dice, they are eliminated and game should end or continue without them
+            if not done:
                 opponent_step_count = 0
                 max_opponent_steps = 100  # Защита от бесконечного цикла
                 actual_num_players = env.num_players  # Get actual number of players for this episode
@@ -909,60 +863,42 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 while not done and self.active_agent_ids[i] != 0 and opponent_step_count < max_opponent_steps:
                     opponent_step_count += 1
 
-                    # CRITICAL: Skip players with no dice - they have already lost and cannot make moves
-                    # Players with 0 dice are eliminated and should be automatically skipped
-                    # Use next_player() which automatically skips players with 0 dice
-                    if env.game_state.player_dice_count[self.active_agent_ids[i]] == 0:
-                        env.game_state.next_player()
-                        self.current_players[i] = env.game_state.current_player
-                        self.active_agent_ids[i] = self.current_players[i]
-                        # Check if game ended after skipping players
-                        if env.game_state.game_over:
+                    # CRITICAL: Skip players with no dice - use GameController
+                    if not env.game_state.is_player_active(self.active_agent_ids[i]):
+                        try:
+                            next_player = env.game_controller.skip_to_next_active_player(
+                                env.game_state, self.active_agent_ids[i]
+                            )
+                            self.active_agent_ids[i] = next_player
+                            self.current_players[i] = next_player
+                            env.game_state.current_player = next_player
+                            # Check if game ended after skipping players
+                            if env.game_state.game_over:
+                                done = True
+                                self.episode_already_done[i] = True
+                            # Continue to next iteration to check next player
+                            continue
+                        except ValueError:
+                            # No active players - game should be over
+                            env.game_state._check_game_over()
                             done = True
                             self.episode_already_done[i] = True
-                        # Continue to next iteration to check next player
-                        continue
+                            continue
 
                     # Opponent's turn
                     opponent_idx = self.active_agent_ids[i] - 1
-                    # Only use opponent model if opponent_idx is within bounds
-                    if opponent_idx < len(self.opponent_models[i]):
-                        opponent_model = self.opponent_models[i][opponent_idx]
-                    else:
-                        opponent_model = None
-
-                    if opponent_model is not None:
+                    # Only use opponent if opponent_idx is within bounds
+                    if opponent_idx < len(self.opponent_models[i]) or (self.use_bot_opponents and opponent_idx < len(self.opponent_bots[i])):
                         # Get observation for opponent
                         obs_for_opp = env.get_observation_for_player(self.active_agent_ids[i])
-                        
-                        # Handle both dict and array observations
-                        if isinstance(obs_for_opp, dict):
-                            obs_for_predict = {key: np.array([value]) for key, value in obs_for_opp.items()}
-                            
-                            # Extract action mask if available and pass it to predict()
-                            action_masks = None
-                            if "action_mask" in obs_for_opp:
-                                mask = obs_for_opp["action_mask"]
-                                if isinstance(mask, np.ndarray):
-                                    mask = mask.astype(bool)
-                                    if mask.ndim > 1:
-                                        mask = mask.flatten()
-                                    action_masks = np.array([mask])
-                                elif isinstance(mask, (list, tuple)):
-                                    mask = np.array(mask, dtype=bool)
-                                    if mask.ndim > 1:
-                                        mask = mask.flatten()
-                                    action_masks = np.array([mask])
-                            
-                            # Predict with action mask if available
-                            if action_masks is not None:
-                                action, _ = opponent_model.predict(obs_for_predict, deterministic=False, action_masks=action_masks)
-                            else:
-                                action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
-                        else:
-                            obs_for_predict = obs_for_opp.reshape(1, -1)
-                            action, _ = opponent_model.predict(obs_for_predict, deterministic=False)
-                        action = int(action[0])
+                        action = self.opponent_manager.get_opponent_action(
+                            i, opponent_idx, obs_for_opp, deterministic=False
+                        )
+
+                        # Force initial bid if needed (using GameController)
+                        action, _ = env.game_controller.force_initial_bid_if_needed(
+                            env.game_state, self.active_agent_ids[i], action, env.max_quantity
+                        )
 
                         env.set_active_player(self.active_agent_ids[i])
 
@@ -970,31 +906,18 @@ class PerudoMultiAgentVecEnv(VecEnv):
                         obs_for_opp, opp_reward, terminated, opp_truncated, opp_info = env.step(action)
                         done = terminated or opp_truncated
 
-                        # Debug mode: print opponent's move
+                        # Debug mode: log opponent's move
                         if self.debug_mode is not None and self.debug_mode.is_set():
-                            try:
-                                from ..utils.helpers import action_to_bid
-                                action_type, param1, param2 = action_to_bid(action, env.max_quantity)
-                                
-                                player_name = f"Player {self.active_agent_ids[i]}"
-                                if action_type == "bid":
-                                    move_str = f"{player_name}: BID {param1}x{param2}"
-                                elif action_type == "challenge":
-                                    move_str = f"{player_name}: CHALLENGE"
-                                elif action_type == "believe":
-                                    move_str = f"{player_name}: BELIEVE"
-                                else:
-                                    move_str = f"{player_name}: {action_type}"
-                                
-                                # Show current game state
-                                current_bid = env.game_state.current_bid
-                                bid_str = f"{current_bid[0]}x{current_bid[1]}" if current_bid else "none"
-                                dice_str = str(list(env.game_state.player_dice_count))
-                                
-                                print(f"[DEBUG] {move_str} | Current bid: {bid_str} | Dice: {dice_str}")
-                            except Exception:
-                                # Silently ignore errors to prevent crashes
-                                pass
+                            from ..utils.helpers import action_to_bid
+                            action_type, param1, param2 = action_to_bid(action, env.max_quantity)
+                            self.debug_logger.log_action(
+                                self.active_agent_ids[i],
+                                action_type,
+                                {"param1": param1, "param2": param2},
+                                env.game_state,
+                                env.max_quantity
+                            )
+                            self.debug_logger.wait_for_input()
 
                         # If episode ended on opponent's turn, mark as done to prevent infinite loops
                         if done:
@@ -1070,6 +993,10 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 dice_str = str(list(env.game_state.player_dice_count))
                 print(f"{win_status} | reward: {final_reward:.2f} | stats: bids={bid_count}, challenges={challenge_count}, believe={believe_count}, invalid={invalid_action_count} | dice: {dice_str}")
                 
+                # Update bot personality statistics if using bot opponents
+                if self.use_bot_opponents and self.bot_personality_tracker is not None:
+                    self._update_bot_statistics(i, winner, env)
+                
                 # Debug mode: wait for user input before continuing
                 if self.debug_mode is not None and self.debug_mode.is_set():
                     try:
@@ -1101,41 +1028,46 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 info["winner"] = winner
                 info["game_over"] = True
 
-            # Get observation for learning agent
-            if obs is None:
-                if all_learn:
-                    obs = env.get_observation_for_player(current_learning_agent)
-                else:
+            # CRITICAL: Only add results if they weren't already added
+            # This prevents duplicate results when learning agent is eliminated
+            if not results_already_added:
+                # Get observation for learning agent
+                if obs is None:
+                    if all_learn:
+                        obs = env.get_observation_for_player(current_learning_agent)
+                    else:
+                        obs = env.get_observation_for_player(0)
+                elif not all_learn and self.active_agent_ids[i] != 0:
                     obs = env.get_observation_for_player(0)
-            elif not all_learn and self.active_agent_ids[i] != 0:
-                obs = env.get_observation_for_player(0)
 
-            observations_list.append(obs)
-            
-            # Calculate step_reward for VecMonitor
-            # VecMonitor accumulates rewards from step_reward on every step
-            if done:
-                # Episode ended: calculate step_reward as difference between final reward and accumulated reward
-                if "episode" in info and "r" in info["episode"]:
-                    final_episode_reward = info["episode"]["r"]
-                    step_reward = final_episode_reward - self.vecmonitor_accumulated_reward[i]
+                observations_list.append(obs)
+                
+                # Calculate step_reward for VecMonitor
+                # VecMonitor accumulates rewards from step_reward on every step
+                if done:
+                    # Episode ended: calculate step_reward as difference between final reward and accumulated reward
+                    if "episode" in info and "r" in info["episode"]:
+                        final_episode_reward = info["episode"]["r"]
+                        step_reward = final_episode_reward - self.vecmonitor_accumulated_reward[i]
+                    else:
+                        # No episode info (shouldn't happen), return 0.0
+                        step_reward = 0.0
+                    # Reset accumulated reward for next episode
+                    self.vecmonitor_accumulated_reward[i] = 0.0
                 else:
-                    # No episode info (shouldn't happen), return 0.0
-                    step_reward = 0.0
-                # Reset accumulated reward for next episode
-                self.vecmonitor_accumulated_reward[i] = 0.0
-            else:
-                # During episode: return reward for learning agent (agent 0), 0.0 for opponent
-                if current_learning_agent == 0:
-                    # Learning agent's step, return actual reward (already accumulated in vecmonitor_accumulated_reward above)
-                    step_reward = reward
-                else:
-                    # Opponent's step, learning agent gets 0 reward
-                    step_reward = 0.0
-            
-            rewards.append(step_reward)
-            dones.append(done)
-            infos.append(info)
+                    # During episode: return reward for learning agent (agent 0), 0.0 for opponent
+                    if current_learning_agent == 0:
+                        # Learning agent's step, return actual reward (already accumulated in vecmonitor_accumulated_reward above)
+                        step_reward = reward
+                    else:
+                        # Opponent's step, learning agent gets 0 reward
+                        step_reward = 0.0
+                
+                rewards.append(step_reward)
+                dones.append(done)
+                infos.append(info)
+                # Mark that results have been added to prevent duplicates
+                results_already_added = True
 
         # CRITICAL: Ensure we have exactly num_envs results
         # This prevents ValueError when VecMonitor tries to broadcast arrays
@@ -1302,4 +1234,62 @@ class PerudoMultiAgentVecEnv(VecEnv):
             return np.ones((self.num_envs, self.action_space.n), dtype=bool)
         
         return masks_array
+    
+    def _update_bot_statistics(self, env_idx: int, winner: int, env):
+        """
+        Update bot personality statistics after a game.
+        
+        Args:
+            env_idx: Environment index
+            winner: Winner player ID (0 = learning agent)
+            env: Environment instance
+        """
+        if not self.use_bot_opponents or self.bot_personality_tracker is None:
+            return
+        
+        # Iterate through all bot opponents in this environment
+        for slot_idx, bot in enumerate(self.opponent_bots[env_idx]):
+            if bot is None:
+                continue
+            
+            bot_player_id = slot_idx + 1  # Bot player IDs start from 1
+            personality_name = bot.personality.name
+            
+            # Check if bot won
+            bot_won = (winner == bot_player_id)
+            
+            # Calculate rounds survived (could use game history or bid history length)
+            rounds_survived = len(env.game_state.bid_history)
+            
+            # Calculate dice lost/won (simplified - could track more accurately)
+            initial_dice = env.dice_per_player
+            final_dice = env.game_state.player_dice_count[bot_player_id]
+            dice_lost = max(0, initial_dice - final_dice)
+            dice_won = max(0, final_dice - initial_dice)
+            
+            # TODO: Track challenges and calzas per bot
+            # For now, use simplified statistics
+            successful_challenges = 0
+            failed_challenges = 0
+            successful_calzas = 0
+            failed_calzas = 0
+            times_challenged = 0
+            times_challenged_correctly = 0
+            
+            # Update statistics
+            self.bot_personality_tracker.update_game_result(
+                personality_name=personality_name,
+                won=bot_won,
+                rounds_survived=rounds_survived,
+                dice_lost=dice_lost,
+                dice_won=dice_won,
+                successful_challenges=successful_challenges,
+                failed_challenges=failed_challenges,
+                successful_calzas=successful_calzas,
+                failed_calzas=failed_calzas,
+                times_challenged=times_challenged,
+                times_challenged_correctly=times_challenged_correctly,
+                update_elo=True,
+                opponent_elo=None,  # Will use rl_agent_elo from tracker
+            )
 

@@ -106,6 +106,38 @@ class GameState:
             List of lists of dice from all players
         """
         return [dice.copy() for dice in self.player_dice]
+    
+    def is_player_active(self, player_id: int) -> bool:
+        """
+        Check if player is active (has dice).
+
+        Args:
+            player_id: Player ID
+
+        Returns:
+            True if player has dice, False otherwise
+        """
+        if 0 <= player_id < self.num_players:
+            return self.player_dice_count[player_id] > 0
+        return False
+    
+    def get_active_players(self) -> List[int]:
+        """
+        Get list of active players (with dice).
+
+        Returns:
+            List of player IDs who have dice
+        """
+        return [i for i in range(self.num_players) if self.player_dice_count[i] > 0]
+    
+    def count_active_players(self) -> int:
+        """
+        Count number of active players (with dice).
+
+        Returns:
+            Number of players with dice
+        """
+        return sum(1 for count in self.player_dice_count if count > 0)
 
     def set_bid(self, player_id: int, quantity: int, value: int) -> bool:
         """

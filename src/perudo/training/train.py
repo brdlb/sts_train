@@ -20,7 +20,8 @@ from stable_baselines3.common.vec_env import VecNormalize, VecMonitor
 from ..game.perudo_vec_env import PerudoMultiAgentVecEnv
 from .config import Config, DEFAULT_CONFIG
 from .opponent_pool import OpponentPool
-from ..agents.transformer_extractor import TransformerFeaturesExtractor
+from .bot_personality_tracker import BotPersonalityTracker
+from ..agents.transformer_extractor import CustomTransformerExtractor
 
 import sys
 import torch
@@ -410,7 +411,7 @@ class AdvantageNormalizationCallback(BaseCallback):
         This ensures advantages are normalized globally across the entire batch.
         In SB3, this is already done in PPO.update(), but we verify it here.
         """
-        # The advantages will be normalized in the PPO update automatically
+        # The advantages will be normalized in PPO.update() by default
         # SB3's PPO already normalizes advantages globally in compute_returns_and_advantage()
         # So we just verify that the rollout buffer exists
         if hasattr(self.model, 'rollout_buffer') and self.model.rollout_buffer is not None:
@@ -869,10 +870,19 @@ class SelfPlayTraining:
             opponent_device=opponent_device,
         )
         
+        # Create bot personality tracker for tracking bot statistics
+        bot_stats_file = os.path.join(config.training.model_dir, "bot_personality_stats.json")
+        self.bot_personality_tracker = BotPersonalityTracker(
+            stats_file=bot_stats_file,
+            elo_k=32,
+        )
+        
         # Create vectorized environment
         # Use transformer_history_length from config if available, otherwise use history_length
         max_history_length = getattr(config.training, 'transformer_history_length', config.game.history_length)
-        debug_moves = getattr(config.training, 'debug_moves', False)
+        use_bot_opponents = getattr(config.training, 'use_bot_opponents', False)
+        bot_personalities = getattr(config.training, 'bot_personalities', None)
+        
         vec_env_raw = PerudoMultiAgentVecEnv(
             num_envs=self.num_envs,
             num_players=self.num_players,
@@ -881,12 +891,14 @@ class SelfPlayTraining:
             max_quantity=config.game.max_quantity,
             history_length=config.game.history_length,
             max_history_length=max_history_length,
-            opponent_pool=self.opponent_pool,
+            opponent_pool=self.opponent_pool if not use_bot_opponents else None,  # Don't use pool if using bots
             random_num_players=config.game.random_num_players,
             min_players=config.game.min_players,
             max_players=config.game.max_players,
             reward_config=config.reward,
-            debug_moves=debug_moves,
+            use_bot_opponents=use_bot_opponents,
+            bot_personalities=bot_personalities,
+            bot_personality_tracker=self.bot_personality_tracker if use_bot_opponents else None,
         )
         
         # Wrap with ActionMasker to enable action masking for MaskablePPO
@@ -974,15 +986,15 @@ class SelfPlayTraining:
                 self.model.tensorboard_log = os.path.abspath(config.training.log_dir)
                 
                 # Update learning rate schedule for continued training
-                # Use slower decay: final LR is 30% of initial (instead of very low 1e-5)
+                # Use slower decay: final LR is 50% of initial (slower decay for better learning)
                 initial_lr = config.training.learning_rate
-                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.3)
+                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.5)
                 self.model.learning_rate = lr_schedule
-                final_lr = initial_lr * 0.3
+                final_lr = initial_lr * 0.5
                 
                 print(f"Successfully loaded model from {latest_model_path}")
                 print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-                print(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
+                print(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 50% of initial)")
                 
                 # Get current timesteps from model (SB3 saves this in the model)
                 self.initial_timesteps = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else 0
@@ -1027,7 +1039,7 @@ class SelfPlayTraining:
                 
                 # Create policy_kwargs with transformer extractor
                 policy_kwargs = dict(
-                    features_extractor_class=TransformerFeaturesExtractor,
+                    features_extractor_class=CustomTransformerExtractor,
                     features_extractor_kwargs=dict(
                         features_dim=config.training.transformer_features_dim,
                         num_layers=config.training.transformer_num_layers,
@@ -1047,10 +1059,10 @@ class SelfPlayTraining:
                 policy_kwargs = config.training.policy_kwargs
             
             # Create learning rate schedule: linear decay with slower rate
-            # Final LR is 30% of initial (instead of very low 1e-5) for more stable training
+            # Final LR is 50% of initial (slower decay for better learning throughout training)
             initial_lr = config.training.learning_rate
-            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.3)
-            final_lr = initial_lr * 0.3
+            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.5)
+            final_lr = initial_lr * 0.5
             
             self.model = MaskablePPO(
                 policy=config.training.policy,
@@ -1072,7 +1084,7 @@ class SelfPlayTraining:
             )
             
             print(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-            print(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
+            print(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 50% of initial)")
             
             # For new models, initial_timesteps is 0
             self.initial_timesteps = 0
@@ -1099,7 +1111,10 @@ class SelfPlayTraining:
         # Start keyboard listener thread for debug mode toggle
         keyboard_thread = threading.Thread(target=_keyboard_listener_thread, daemon=True)
         keyboard_thread.start()
-        print("\n[DEBUG MODE] Press Ctrl+D to toggle debug mode (show every move in game)")
+        
+        # Enable debug mode by default
+        set_debug_mode(False)
+
         
         # Store debug mode flag in vec_env for access during training
         self._vec_env_raw.debug_mode = _debug_mode
@@ -1161,10 +1176,10 @@ class SelfPlayTraining:
         # Adaptive entropy callback (if enabled)
         if getattr(self.config.training, 'adaptive_entropy', False):
             adaptive_entropy_callback = AdaptiveEntropyCallback(
-                threshold_low=getattr(self.config.training, 'entropy_threshold_low', -3.5),
-                threshold_high=getattr(self.config.training, 'entropy_threshold_high', -3.3),
-                adjustment_rate=getattr(self.config.training, 'entropy_adjustment_rate', 0.008),
-                max_ent_coef=getattr(self.config.training, 'entropy_max_coef', 0.25),
+                threshold_low=self.config.training.entropy_threshold_low,
+                threshold_high=self.config.training.entropy_threshold_high,
+                adjustment_rate=self.config.training.entropy_adjustment_rate,
+                max_ent_coef=self.config.training.entropy_max_coef,
                 verbose=self.config.training.verbose,
             )
             callbacks.append(adaptive_entropy_callback)
@@ -1221,6 +1236,10 @@ class SelfPlayTraining:
         # Print pool statistics
         pool_stats = self.opponent_pool.get_statistics()
         print(f"Opponent pool statistics: {pool_stats}")
+        
+        # Print bot personality statistics if using bot opponents
+        if self.bot_personality_tracker is not None:
+            self.bot_personality_tracker.print_summary()
         
     def save_model(self, path: str):
         """Save the current model."""

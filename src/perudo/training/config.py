@@ -30,23 +30,19 @@ class RewardConfig:
     Intermediate rewards are set to 0.0 but kept in structure for easy re-enabling if needed.
     """
 
-    # Game outcome rewards
     win_reward: float = 2  # Reward for winning the game (sparse reward - main objective)
     win_dice_bonus: float = 0.1 # Bonus per remaining die when winning the game
     lose_penalty: float = 0  # Penalty for losing the game (negative reward to distinguish from win)
 
-    # Dice loss penalties
     dice_lost_penalty: float = -0.5 # Minimal penalty per die lost (for training stability)
 
-    # Challenge rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
+
     challenge_success_reward: float = 0.1  # Reward for successful challenge (caught bluff) - DISABLED
     challenge_failure_penalty: float = -0.05  # Penalty for unsuccessful challenge that led to dice loss - DISABLED
 
-    # Believe rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
     believe_success_reward: float = 0.1  # Reward for successful believe call (caught bluff) - DISABLED
     believe_failure_penalty: float = -0.05  # Penalty for unsuccessful believe call that led to dice loss - DISABLED
 
-    # Bid-related rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
     bid_small_penalty: float = -0.01  # Small negative reward for bidding to encourage finishing the round - DISABLED
     unsuccessful_bid_penalty: float = -0.1  # Penalty for unsuccessful bid that led to dice loss - DISABLED
 
@@ -54,39 +50,76 @@ class RewardConfig:
     round_no_dice_lost_reward: float = 0.0  # Reward for each round in which the agent did not lose a die - DISABLED
     successful_bluff_reward: float = 0.0  # Reward for successful bluff (bid was correct or never challenged) - DISABLED
 
-    # Bid defense rewards (DISABLED - set to 0.0 for sparse rewards)
-    # When opponent challenges/believes agent's bid and fails
     defend_bid_reward_challenge: float = 0.01  # Reward for successfully defending bid against challenge - DISABLED
     defend_bid_reward_believe: float = 0.01  # Reward for successfully defending bid against believe - DISABLED
 
-    # Dice advantage rewards (DISABLED - set to 0.0 for sparse rewards)
-    # WARNING: these are given every step and accumulate, can cause reward hacking
     dice_advantage_reward: float = 0.0  # Reward per die advantage over average opponents - DISABLED
     dice_advantage_max: float = 0.0  # Maximum dice advantage to consider (cap) - kept for structure
     leader_bonus: float = 0.0  # Bonus reward for being the leader (having more dice than all opponents) - DISABLED
 
-    # Invalid action penalty (kept minimal to guide learning, but not too harsh)
     invalid_action_penalty: float = -0.01  # Minimal penalty for invalid action (helps avoid invalid actions)
+
+
+@dataclass
+class GameControllerConfig:
+    """Configuration for game process management."""
+    max_skipped_players: int = 100  # Protection against infinite loop
+    auto_force_initial_bid: bool = True  # Automatically replace challenge/believe with bid at round start
+    fallback_bid_quantity: int = 1  # Quantity for forced initial bid
+    fallback_bid_value: int = 2  # Value for forced initial bid
+
+
+@dataclass
+class ObservationConfig:
+    """Configuration for observation building."""
+    max_history_length: int = 10
+    max_players: int = 8
+    include_action_mask: bool = True
+    validate_observations: bool = False  # Validation disabled for performance
+
+
+@dataclass
+class DebugConfig:
+    """Configuration for debugging."""
+    enabled: bool = False
+    log_actions: bool = True
+    log_game_state: bool = True
+    wait_for_input: bool = True
+    verbose_episode_summary: bool = True
+
+
+@dataclass
+class EnvironmentConfig:
+    """Unified environment configuration."""
+    reward: RewardConfig = field(default_factory=RewardConfig)
+    game_controller: GameControllerConfig = field(default_factory=GameControllerConfig)
+    observation: ObservationConfig = field(default_factory=ObservationConfig)
+    debug: DebugConfig = field(default_factory=DebugConfig)
 
 
 @dataclass
 class TrainingConfig:
     """Training configuration."""
 
-    # PPO parameters (optimized for Transformer + PPO architecture)
+    # PPO parameters (optimized to address explained_variance and approx_kl issues)
     policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
-    opponent_device: Optional[str] = "cpu"  
-    learning_rate: float = 1.5e-4  # Optimized for Transformer: conservative increase from 4e-5 for better learning speed
+    opponent_device: Optional[str] = "cpu"
+    
+    # Opponent configuration
+    use_bot_opponents: bool = True  # If True, use rule-based bots instead of RL agents as opponents
+    bot_personalities: Optional[List[str]] = None  # List of bot personality names to use (if None, uses all)
+    
+    learning_rate: float = 1.0e-4  # Reduced from 1.2e-4 to decrease approx_kl and improve stability
     n_steps: int = 8192
     batch_size: int = 1024  # Increased for Transformer stability: larger batches improve attention mechanism gradients
-    n_epochs: int = 12  # Increased for better data utilization with Transformer architecture
+    n_epochs: int = 8  # Reduced from 10 to further decrease approx_kl (fewer updates = less aggressive)
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    clip_range: float = 0.15  # Increased from 0.01 to address high clip_fraction (0.6-0.7); conservative for Transformer stability
-    ent_coef: float = 0.12  # Slightly reduced as entropy is already at good level (-3.5)
-    vf_coef: float = 0.5  # Standard value; with enhanced critic architecture (vf=[256, 128]), high coefficient can cause overfitting
+    clip_range: float = 0.3  # Increased from 0.25 to address persistent clip_fraction=0.3-0.5 issue
+    ent_coef: float = 0.15  # Increased from 0.12 for better exploration and stability
+    vf_coef: float = 1.2  # Increased from 0.75 to 1.2: critical fix for explained_variance≈0 issue
     max_grad_norm: float = 0.5  # Critical for Transformer stability: prevents exploding gradients
     
     # Adaptive entropy coefficient parameters
@@ -120,7 +153,6 @@ class TrainingConfig:
     # Other
     verbose: int = 1
     seed: Optional[int] = None
-    debug_moves: bool = True  # Enable detailed move logging (forces num_envs=1)
 
 
 @dataclass
@@ -130,6 +162,7 @@ class Config:
     game: GameConfig = None
     training: TrainingConfig = None
     reward: RewardConfig = None
+    environment: EnvironmentConfig = None
 
     def __post_init__(self):
         """Initialize default values."""
@@ -139,6 +172,8 @@ class Config:
             self.training = TrainingConfig()
         if self.reward is None:
             self.reward = RewardConfig()
+        if self.environment is None:
+            self.environment = EnvironmentConfig()
 
 
 # Default configuration
