@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { gamesApi, GameState, ExtendedActionHistoryEntry } from '../services/api';
+import { gamesApi, GameState } from '../services/api';
 import Player from './Player';
 import BidControls from './BidControls';
 import { GameHistory } from './GameHistory';
@@ -383,8 +383,17 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   const totalDiceInPlay = gameState.player_dice_count.reduce((sum, count) => sum + count, 0);
   
   // Find last bidder from bid history
-  const lastBidderId = gameState.bid_history.length > 0 
-    ? gameState.bid_history[gameState.bid_history.length - 1][0]
+  // Only show indicator if current_bid matches the last bid in history
+  const lastBidderId = gameState.bid_history.length > 0 && gameState.current_bid
+    ? (() => {
+        const lastBidInHistory = gameState.bid_history[gameState.bid_history.length - 1];
+        // Verify that current_bid matches the last bid in history
+        if (lastBidInHistory[1] === gameState.current_bid[0] && 
+            lastBidInHistory[2] === gameState.current_bid[1]) {
+          return lastBidInHistory[0];
+        }
+        return null;
+      })()
     : null;
 
   // Arrange players: human player at bottom
@@ -409,7 +418,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         } text-white text-center text-xl font-bold`}>
           {gameState.winner === 0
             ? '🎉 You Won! 🎉'
-            : `Game Over! ${PLAYER_NAMES[gameState.winner] || `Player ${gameState.winner}`} won.`}
+            : `Game Over! ${gameState.winner !== null ? (PLAYER_NAMES[gameState.winner] || `Player ${gameState.winner}`) : 'Unknown'} won.`}
         </div>
       )}
 

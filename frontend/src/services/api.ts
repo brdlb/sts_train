@@ -60,6 +60,7 @@ export interface GameState {
   player_dice: {
     bid_history: number[][];
     static_info: number[];
+    dice_values?: number[];
   };
   public_info: any;
 }

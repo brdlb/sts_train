@@ -65,7 +65,7 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
       <div className="flex-grow overflow-y-auto pr-2">
         {extendedActionHistory && extendedActionHistory.length > 0 ? (
           <div className="space-y-2">
-            {extendedActionHistory.filter(entry => entry && entry.consequences).map((entry, index) => {
+            {extendedActionHistory.filter(entry => entry && entry.consequences).slice().reverse().map((entry, index) => {
               // Validate entry
               if (!entry || !entry.consequences) {
                 return null;
@@ -85,9 +85,12 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                 ? 'text-red-400' // Red for failure
                 : 'text-gray-400'; // Gray for neutral
 
+              // Use a unique key based on entry data
+              const uniqueKey = `${entry.player_id}-${entry.action_type}-${entry.consequences.bid_quantity || ''}-${entry.consequences.bid_value || ''}-${index}`;
+
               return (
                 <div
-                  key={index}
+                  key={uniqueKey}
                   className={`p-3 rounded-lg ${bgColor} border border-gray-700/50 transition-colors`}
                 >
                   <div className="font-semibold text-white mb-1">
@@ -118,11 +121,16 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
             {bidHistory.length === 0 && !currentBid && (
               <div className="text-gray-400 italic">No actions yet</div>
             )}
-            {bidHistory.map((bid, index) => {
+            {currentBid && (
+              <div className="p-2 rounded bg-blue-900/30 border border-blue-700/50 font-bold text-blue-300">
+                <strong>Current Bid:</strong> {currentBid[0]}x{currentBid[1]}
+              </div>
+            )}
+            {bidHistory.slice().reverse().map((bid, index) => {
               const [playerId, quantity, value] = bid;
               return (
                 <div
-                  key={index}
+                  key={`${playerId}-${quantity}-${value}-${index}`}
                   className={`p-2 rounded ${index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50'} border border-gray-700/50`}
                 >
                   <strong className="text-white">{playerNames[playerId] || `Player ${playerId}`}:</strong> 
@@ -130,11 +138,6 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                 </div>
               );
             })}
-            {currentBid && (
-              <div className="p-2 rounded bg-blue-900/30 border border-blue-700/50 font-bold text-blue-300">
-                <strong>Current Bid:</strong> {currentBid[0]}x{currentBid[1]}
-              </div>
-            )}
           </div>
         )}
       </div>
