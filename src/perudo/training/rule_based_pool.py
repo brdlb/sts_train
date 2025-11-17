@@ -48,6 +48,7 @@ class RuleBasedOpponentPool:
         difficulty_distribution: Optional[Dict[str, float]] = None,
         statistics_dir: Optional[str] = None,
         elo_k: int = 32,
+        allowed_bot_personalities: Optional[List[str]] = None,
     ):
         """
         Initialize rule-based opponent pool.
@@ -61,6 +62,8 @@ class RuleBasedOpponentPool:
                 If None, uses equal distribution
             statistics_dir: Directory to store statistics (default: models/rule_based_pool)
             elo_k: ELO K-factor for rating updates
+            allowed_bot_personalities: List of allowed bot personality keys (e.g., ["CONSERVATIVE"]).
+                                      If None, all bots are allowed.
         """
         self.max_quantity = max_quantity
         self.max_players = max_players
@@ -82,11 +85,30 @@ class RuleBasedOpponentPool:
         # Statistics file path
         self.statistics_file = os.path.join(statistics_dir, "bot_statistics.json")
         
-        # Create bots for each personality
+        # Filter personalities if allowed_bot_personalities is specified
+        if allowed_bot_personalities is not None:
+            # Validate that all requested personalities exist
+            valid_personalities = set(BOT_PERSONALITIES.keys())
+            requested_personalities = set(allowed_bot_personalities)
+            invalid_personalities = requested_personalities - valid_personalities
+            if invalid_personalities:
+                raise ValueError(
+                    f"Invalid bot personality keys: {invalid_personalities}. "
+                    f"Valid keys are: {sorted(valid_personalities)}"
+                )
+            # Filter to only allowed personalities
+            filtered_personalities = {
+                k: v for k, v in BOT_PERSONALITIES.items()
+                if k in allowed_bot_personalities
+            }
+        else:
+            filtered_personalities = BOT_PERSONALITIES
+        
+        # Create bots for each allowed personality
         self.bots: Dict[str, RuleBasedAgent] = {}
         self.bots_by_difficulty: Dict[str, List[str]] = defaultdict(list)
         
-        for personality_key, personality in BOT_PERSONALITIES.items():
+        for personality_key, personality in filtered_personalities.items():
             # Create agent with unique ID (use index)
             agent_id = len(self.bots)
             bot = RuleBasedAgent(
@@ -124,9 +146,9 @@ class RuleBasedOpponentPool:
         Returns:
             RuleBasedAgent instance
         """
-        # Always return LATE_BLOOMER bot
-        if "LATE_BLOOMER" in self.bots:
-            return self.bots["LATE_BLOOMER"]
+        # Always return SOME bot
+        #if "SOME" in self.bots:
+        #    return self.bots["SOME"]
         
         # Fallback to original logic if LATE_BLOOMER not found (should not happen)
         if exclude_personalities is None:
@@ -283,8 +305,10 @@ class RuleBasedOpponentPool:
                 print(f"Warning: Could not load bot statistics: {e}")
         
         # Initialize statistics for personalities that don't have them yet
-        for personality_key, personality in BOT_PERSONALITIES.items():
+        # Only initialize for allowed personalities (those in self.bots)
+        for personality_key in self.bots.keys():
             if personality_key not in self.bot_statistics:
+                personality = BOT_PERSONALITIES[personality_key]
                 self.bot_statistics[personality_key] = BotStatistics(
                     personality_key=personality_key,
                     name=personality.name,

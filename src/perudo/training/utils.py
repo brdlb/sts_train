@@ -87,6 +87,7 @@ def find_latest_model(model_dir: str) -> Optional[str]:
     Returns:
         Path to the latest model (by modification time), or None if no models found
     """
+    print(model_dir)
     if not os.path.exists(model_dir):
         return None
     
@@ -99,6 +100,7 @@ def find_latest_model(model_dir: str) -> Optional[str]:
     
     # Sort by modification time (most recent first)
     zip_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+    print(zip_files[0])
     
     # Return the most recent file
     return zip_files[0]

@@ -32,37 +32,37 @@ class RewardConfig:
 
     # Game outcome rewards
     win_reward: float = 2  # Reward for winning the game (sparse reward - main objective)
-    win_dice_bonus: float = 0.1 # Bonus per remaining die when winning the game
-    lose_penalty: float = 0  # Penalty for losing the game (negative reward to distinguish from win)
+    win_dice_bonus: float = 0 # Bonus per remaining die when winning the game
+    lose_penalty: float = -0.2  # Penalty for losing the game (negative reward to distinguish from win)
 
     # Dice loss penalties
-    dice_lost_penalty: float = -0.5 # Minimal penalty per die lost (for training stability)
+    dice_lost_penalty: float = -0.05 # Minimal penalty per die lost (for training stability)
 
     # Challenge rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
-    challenge_success_reward: float = 0.2  # Reward for successful challenge (caught bluff) - DISABLED
-    challenge_failure_penalty: float = -0.05  # Penalty for unsuccessful challenge that led to dice loss - DISABLED
+    challenge_success_reward: float = 0.1  # Reward for successful challenge (caught bluff) - DISABLED
+    challenge_failure_penalty: float = 0.1  # Penalty for unsuccessful challenge that led to dice loss - DISABLED
 
     # Believe rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
-    believe_success_reward: float = 0.2  # Reward for successful believe call (caught bluff) - DISABLED
-    believe_failure_penalty: float = -0.05  # Penalty for unsuccessful believe call that led to dice loss - DISABLED
+    believe_success_reward: float = 0  # Reward for successful believe call (caught bluff) - DISABLED
+    believe_failure_penalty: float = 0  # Penalty for unsuccessful believe call that led to dice loss - DISABLED
 
     # Bid-related rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
-    bid_small_penalty: float = 0.00  # Small negative reward for bidding to encourage finishing the round - DISABLED
-    unsuccessful_bid_penalty: float = -0.1  # Penalty for unsuccessful bid that led to dice loss - DISABLED
+    bid_small_penalty: float = 0 # Small negative reward for bidding to encourage finishing the round - DISABLED
+    unsuccessful_bid_penalty: float = 0 # Penalty for unsuccessful bid that led to dice loss - DISABLED
     
     # Minimal bid incentives (ENABLED - gently encourages minimal bids)
-    bid_minimal_bonus: float = 0.003  # Small bonus for making minimal valid bid
-    bid_excess_penalty: float = -0.005  # Small penalty for exceeding minimal bid (proportional to excess)
+    bid_minimal_bonus: float = 0  # Small bonus for making minimal valid bid
+    bid_excess_penalty: float = 0 # Small penalty for exceeding minimal bid (proportional to excess)
     bid_excess_threshold: int = 1  # Penalty applies only if excess >= threshold
 
 
-    round_no_dice_lost_reward: float = 0.05  # Reward for each round in which the agent did not lose a die - DISABLED
-    successful_bluff_reward: float = 0.2  # Reward for successful bluff (bid was correct or never challenged) - DISABLED
+    round_no_dice_lost_reward: float = 0.0  # Reward for each round in which the agent did not lose a die - DISABLED
+    successful_bluff_reward: float = 0.0  # Reward for successful bluff (bid was correct or never challenged) - DISABLED
 
     # Bid defense rewards (DISABLED - set to 0.0 for sparse rewards)
     # When opponent challenges/believes agent's bid and fails
-    defend_bid_reward_challenge: float = 0.2  # Reward for successfully defending bid against challenge - DISABLED
-    defend_bid_reward_believe: float = 0.2  # Reward for successfully defending bid against believe - DISABLED
+    defend_bid_reward_challenge: float = 0.0  # Reward for successfully defending bid against challenge - DISABLED
+    defend_bid_reward_believe: float = 0.0  # Reward for successfully defending bid against believe - DISABLED
 
     # Dice advantage rewards (DISABLED - set to 0.0 for sparse rewards)
     # WARNING: these are given every step and accumulate, can cause reward hacking
@@ -71,35 +71,38 @@ class RewardConfig:
     leader_bonus: float = 0.0  # Bonus reward for being the leader (having more dice than all opponents) - DISABLED
 
     # Invalid action penalty (kept minimal to guide learning, but not too harsh)
-    invalid_action_penalty: float = -0.01  # Minimal penalty for invalid action (helps avoid invalid actions)
+    invalid_action_penalty: float = -0.00  # Minimal penalty for invalid action (helps avoid invalid actions)
 
 
 @dataclass
 class TrainingConfig:
     """Training configuration."""
 
-    # PPO parameters (optimized to address explained_variance and approx_kl issues)
+    # PPO parameters - Optimized for compact model based on training analysis
+    # Analysis: clip_fraction 0.15-0.25 indicates good clipping, but need stability improvements
     policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None 
     opponent_device: Optional[str] = "cuda"  
-    learning_rate: float = 3.0e-4  
-    n_steps: int = 10240  # Increased for better training stability with optimized model
-    batch_size: int = 2048  # Increased as model is now much lighter (8x smaller history and simpler topology)
-    n_epochs: int = 10  
-    gamma: float = 0.99
-    gae_lambda: float = 0.95
-    clip_range: float = 0.25 
-    ent_coef: float = 0.4  
-    vf_coef: float = 0.75 
-    max_grad_norm: float = 0.5 
+    learning_rate: float = 2.0e-4  # Conservative learning rate for compact model
+    n_steps: int = 6144  # More frequent updates (effective buffer size: 6144 × num_envs)
+    batch_size: int = 1024  # Better for compact model (6144×4/1024=24 batches)
+    n_epochs: int = 6  # More frequent updates while maintaining training quality
+    gamma: float = 0.99  # Standard discount factor
+    gae_lambda: float = 0.95  # Standard GAE parameter
+    clip_range: float = 0.2  # Standard PPO value for stability
+    ent_coef: float = 0.01  # Standard PPO value for stable training
+    vf_coef: float = 0.75  # Balanced value
+    max_grad_norm: float = 0.75  # Improves gradient stability 
     
     # Adaptive entropy coefficient parameters
+    # Analysis: entropy_loss shows policy becoming too deterministic around 40k steps
+    # Adjusted thresholds to maintain better exploration-exploitation balance
     adaptive_entropy: bool = True  # Enable adaptive entropy coefficient adjustment
-    entropy_threshold_low: float = -3.48  # Slightly lower for earlier response
-    entropy_threshold_high: float = -3.32  # Slightly higher for wider range
-    entropy_adjustment_rate: float = 0.008  # Rate of ent_coef adjustment per update (slower)
-    entropy_max_coef: float = 0.4  # Maximum allowed ent_coef value (increased to match new ent_coef)  
+    entropy_threshold_low: float = -3.5  # Lower threshold - increase ent_coef when entropy too low
+    entropy_threshold_high: float = -3.0  # Higher threshold - decrease ent_coef when entropy too high
+    entropy_adjustment_rate: float = 0.01  # Faster adjustment to respond quickly to entropy issues
+    entropy_max_coef: float = 0.1  # Aligned with new ent_coef=0.01  
     
     # Transformer parameters (optimized for sequence length 12)
     transformer_features_dim: int = 128  # Output feature dimension
@@ -112,7 +115,7 @@ class TrainingConfig:
 
     # Training parameters
     num_envs: int = 4  # Number of parallel environments (tables)
-    total_timesteps: int = 1_000_000
+    total_timesteps: int = 5_000_000
     save_freq: int = 100_000  # Save model every N steps
     eval_freq: int = 50_000  # Evaluate model every N steps
     eval_episodes: int = 10  # Number of episodes for evaluation
@@ -129,6 +132,10 @@ class TrainingConfig:
         default_factory=lambda: {"EASY": 0.33, "MEDIUM": 0.34, "HARD": 0.33}
     )  # Distribution of bot difficulty levels
     mixed_mode_ratio: float = 0.5  # Ratio of botplay in mixed mode (0.0-1.0)
+    allowed_bot_personalities: Optional[List[str]] = None #field(
+    
+    
+     #   default_factory=lambda: ["CONSERVATIVE"] )  # List of allowed bot personality keys (e.g., ["CONSERVATIVE"]). If None, all bots are allowed.
 
     # Trajectory collection
     collect_trajectories: bool = False  # Enable collection and saving of winner trajectories (for imitation learning)

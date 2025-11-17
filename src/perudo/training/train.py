@@ -158,6 +158,9 @@ class SelfPlayTraining:
                 self.config.training, 'bot_difficulty_distribution',
                 {"EASY": 0.33, "MEDIUM": 0.34, "HARD": 0.33}
             )
+            allowed_bot_personalities = getattr(
+                self.config.training, 'allowed_bot_personalities', None
+            )
             # Set statistics directory for rule-based bots
             statistics_dir = os.path.join(self.config.training.model_dir, "rule_based_pool")
             self.rule_based_pool = RuleBasedOpponentPool(
@@ -166,8 +169,12 @@ class SelfPlayTraining:
                 max_history_length=max_history_length,
                 difficulty_distribution=bot_difficulty_distribution,
                 statistics_dir=statistics_dir,
+                allowed_bot_personalities=allowed_bot_personalities,
             )
-            logger.info(f"Initialized rule-based opponent pool with {len(self.rule_based_pool.bots)} bot personalities")
+            if allowed_bot_personalities:
+                logger.info(f"Initialized rule-based opponent pool with {len(self.rule_based_pool.bots)} bot personalities: {allowed_bot_personalities}")
+            else:
+                logger.info(f"Initialized rule-based opponent pool with {len(self.rule_based_pool.bots)} bot personalities")
         
         # Create RL opponent pool (for selfplay or mixed mode)
         self.opponent_pool = None
@@ -256,15 +263,16 @@ class SelfPlayTraining:
                 self.model.tensorboard_log = os.path.abspath(self.config.training.log_dir)
                 
                 # Update learning rate schedule for continued training
-                # Use slower decay: final LR is 50% of initial (slower decay for better learning)
+                # Analysis: LR was decaying too fast, adjusted to maintain higher LR throughout training
+                # Final LR is 70% of initial (slower decay for better learning)
                 initial_lr = self.config.training.learning_rate
-                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.5)
+                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.7)
                 self.model.learning_rate = lr_schedule
-                final_lr = initial_lr * 0.5
+                final_lr = initial_lr * 0.7
                 
                 logger.info(f"Successfully loaded model from {latest_model_path}")
                 logger.info(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-                logger.info(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 50% of initial)")
+                logger.info(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 70% of initial)")
                 
                 # Get current timesteps from model (SB3 saves this in the model)
                 self.initial_timesteps = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else 0
@@ -329,10 +337,11 @@ class SelfPlayTraining:
                 policy_kwargs = self.config.training.policy_kwargs
             
             # Create learning rate schedule: linear decay with slower rate
-            # Final LR is 50% of initial (slower decay for better learning throughout training)
+            # Analysis: LR was decaying too fast (to ~0), adjusted to maintain higher LR throughout training
+            # Final LR is 70% of initial (slower decay for better learning throughout training)
             initial_lr = self.config.training.learning_rate
-            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.5)
-            final_lr = initial_lr * 0.5
+            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.7)
+            final_lr = initial_lr * 0.7
             
             self.model = MaskablePPO(
                 policy=self.config.training.policy,
