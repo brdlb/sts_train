@@ -440,4 +440,23 @@ def create_action_mask(
         if action_space_size > 1:
             mask[1] = True  # believe
     
+    # CRITICAL: Final validation - ensure mask is pure boolean array
+    # This prevents any numerical issues that could cause Simplex constraint violations
+    if mask.dtype != bool:
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            f"Action mask is not boolean (dtype: {mask.dtype}). "
+            f"Converting to boolean."
+        )
+        mask = mask.astype(bool)
+    
+    # CRITICAL: Double-check that at least one action is valid after all processing
+    if not mask.any():
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            f"CRITICAL: All actions still masked after fallback in create_action_mask. "
+            f"Enabling all actions as emergency fallback."
+        )
+        mask = np.ones(action_space_size, dtype=bool)
+    
     return mask

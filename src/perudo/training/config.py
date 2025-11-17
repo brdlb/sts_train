@@ -33,22 +33,22 @@ class RewardConfig:
     # Game outcome rewards
     win_reward: float = 2  # Reward for winning the game (sparse reward - main objective)
     win_dice_bonus: float = 0 # Bonus per remaining die when winning the game
-    lose_penalty: float = -0.2  # Penalty for losing the game (negative reward to distinguish from win)
+    lose_penalty: float = -0.5  # Penalty for losing the game (negative reward to distinguish from win)
 
     # Dice loss penalties
-    dice_lost_penalty: float = -0.05 # Minimal penalty per die lost (for training stability)
+    dice_lost_penalty: float = 0 # Minimal penalty per die lost (for training stability)
 
     # Challenge rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
     challenge_success_reward: float = 0.1  # Reward for successful challenge (caught bluff) - DISABLED
-    challenge_failure_penalty: float = 0.1  # Penalty for unsuccessful challenge that led to dice loss - DISABLED
+    challenge_failure_penalty: float = 0  # Penalty for unsuccessful challenge that led to dice loss - DISABLED
 
     # Believe rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
-    believe_success_reward: float = 0  # Reward for successful believe call (caught bluff) - DISABLED
+    believe_success_reward: float = 0.1  # Reward for successful believe call (caught bluff) - DISABLED
     believe_failure_penalty: float = 0  # Penalty for unsuccessful believe call that led to dice loss - DISABLED
 
     # Bid-related rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
     bid_small_penalty: float = 0 # Small negative reward for bidding to encourage finishing the round - DISABLED
-    unsuccessful_bid_penalty: float = 0 # Penalty for unsuccessful bid that led to dice loss - DISABLED
+    unsuccessful_bid_penalty: float = -0.1 # Penalty for unsuccessful bid that led to dice loss - DISABLED
     
     # Minimal bid incentives (ENABLED - gently encourages minimal bids)
     bid_minimal_bonus: float = 0  # Small bonus for making minimal valid bid
@@ -91,7 +91,7 @@ class TrainingConfig:
     gamma: float = 0.99  # Standard discount factor
     gae_lambda: float = 0.95  # Standard GAE parameter
     clip_range: float = 0.2  # Standard PPO value for stability
-    ent_coef: float = 0.01  # Standard PPO value for stable training
+    ent_coef: float = 0.05 
     vf_coef: float = 0.75  # Balanced value
     max_grad_norm: float = 0.75  # Improves gradient stability 
     
