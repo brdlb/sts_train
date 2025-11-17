@@ -1,16 +1,12 @@
 import React from 'react';
 import { ExtendedActionHistoryEntry } from '../services/api';
+import { getPlayerName } from '../utils/playerHelpers';
 
 interface GameHistoryProps {
   bidHistory: Array<[number, number, number]>;
   currentBid: [number, number] | null;
   extendedActionHistory?: ExtendedActionHistoryEntry[];
 }
-
-const getPlayerName = (playerId: number): string => {
-  if (playerId === 0) return 'You (Human)';
-  return `AI Player ${playerId}`;
-};
 
 const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
   const playerName = getPlayerName(entry.player_id);

@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { modelsApi, ModelInfo } from '../services/api';
-import './ModelSelector.css'; // Добавляем CSS для стилизации
 
 interface ModelSelectorProps {
   onStart: (modelPaths: string[]) => void;
@@ -72,8 +71,15 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onStart }) => {
           <p className="text-center text-gray-300 mb-8">Choose models for 3 AI players (you will be player 0)</p>
 
           {models.length === 0 && (
-            <div className="bg-gray-700 border border-gray-600 rounded-lg p-6 text-center text-gray-300">
-              No models available. Please train models first.
+            <div className="bg-gray-700 border border-gray-600 rounded-lg p-8 text-center">
+              <div className="text-6xl mb-4">🎲</div>
+              <h3 className="text-2xl font-semibold text-white mb-2">No Models Available</h3>
+              <p className="text-gray-300 mb-4">
+                You need to train models before you can start a game.
+              </p>
+              <p className="text-sm text-gray-400">
+                Please train models first using the training scripts.
+              </p>
             </div>
           )}
 

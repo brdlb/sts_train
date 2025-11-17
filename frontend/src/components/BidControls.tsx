@@ -227,6 +227,7 @@ const BidControls: React.FC<BidControlsProps> = ({
               onClick={() => setQuantity(q => Math.min(maxQuantity, q + 1))}
               disabled={isQuantityChangeDisabled}
               className="w-12 h-12 md:w-14 md:h-14 flex-shrink-0 bg-gray-700 text-white rounded-md disabled:opacity-50 text-3xl"
+              aria-label="Increase quantity"
           >+</button>
           
           <div className="grid grid-cols-3 gap-2">
@@ -235,6 +236,7 @@ const BidControls: React.FC<BidControlsProps> = ({
                   key={f}
                   onClick={() => handleFaceChange(f)}
                   disabled={isFaceSelectionDisabled}
+                  aria-label={`Select dice face ${f}`}
                   className={clsx(
                     'w-12 h-12 md:w-14 md:h-14 flex items-center justify-center rounded-md transition-colors',
                     face === f 
@@ -265,6 +267,7 @@ const BidControls: React.FC<BidControlsProps> = ({
         <button
           onClick={handlePlaceBid}
           disabled={disabled || !face}
+          aria-label="Make bid"
           className={`w-full text-white font-bold py-3 px-4 rounded-lg transition-colors text-lg ${
             disabled || !face
               ? 'bg-slate-500 cursor-not-allowed'
@@ -277,6 +280,7 @@ const BidControls: React.FC<BidControlsProps> = ({
             <button
               onClick={onBelieve}
               disabled={disabled || !canBelieve}
+              aria-label="Believe the current bid"
               className="w-1/3 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-2 md:px-4 rounded-lg transition-colors disabled:bg-gray-500 disabled:cursor-not-allowed text-base md:text-lg"
             >
               Believe!
@@ -284,6 +288,7 @@ const BidControls: React.FC<BidControlsProps> = ({
             <button
               onClick={onChallenge}
               disabled={disabled || !canChallenge}
+              aria-label="Challenge the current bid"
               className="w-2/3 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition-colors disabled:bg-gray-500 disabled:cursor-not-allowed text-lg"
             >
               Challenge!

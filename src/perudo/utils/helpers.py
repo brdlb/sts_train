@@ -3,6 +3,7 @@ Helper functions for working with Perudo.
 """
 
 from typing import List, Tuple, Optional, Dict, Any
+import logging
 import numpy as np
 from ..training.config import RewardConfig, DEFAULT_CONFIG
 
@@ -423,4 +424,20 @@ def create_action_mask(
             action_idx = bid_to_action(quantity, value, max_quantity)
             if 0 <= action_idx < action_space_size:
                 mask[action_idx] = True
+    
+    # CRITICAL: Ensure at least one action is valid
+    # If all actions are masked, sb3_contrib cannot normalize probabilities (Simplex constraint violation)
+    # This can happen if get_available_actions returns empty list
+    if not mask.any():
+        # All actions are masked - enable challenge and believe as fallback
+        logger = logging.getLogger(__name__)
+        logger.debug(
+            f"All actions masked in create_action_mask. "
+            f"Enabling challenge (action 0) and believe (action 1) as fallback. "
+            f"Available actions: {available_actions}"
+        )
+        mask[0] = True  # challenge
+        if action_space_size > 1:
+            mask[1] = True  # believe
+    
     return mask

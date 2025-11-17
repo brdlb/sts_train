@@ -4,6 +4,7 @@ Each environment represents one table with 4 agents.
 """
 
 import random
+import logging
 import numpy as np
 from typing import List, Optional, Dict, Tuple, Any, TYPE_CHECKING
 from gymnasium import spaces
@@ -1528,6 +1529,19 @@ class PerudoMultiAgentVecEnv(VecEnv):
                                   f"expected {self.action_space.n}, got {len(action_mask)}")
                             masks.append(np.ones(self.action_space.n, dtype=bool))
                         else:
+                            # CRITICAL: Ensure at least one action is valid
+                            # If all actions are masked, sb3_contrib cannot normalize probabilities (Simplex constraint violation)
+                            if not action_mask.any():
+                                # All actions are masked - this will cause Simplex constraint violation
+                                # Enable challenge and believe as fallback
+                                logger = logging.getLogger(__name__)
+                                logger.debug(
+                                    f"All actions masked for env {i}, agent {agent_id}. "
+                                    f"Enabling challenge (action 0) and believe (action 1) as fallback."
+                                )
+                                action_mask[0] = True  # challenge
+                                if self.action_space.n > 1:
+                                    action_mask[1] = True  # believe
                             masks.append(action_mask)
                     else:
                         # No action_mask in observation, return all actions as valid

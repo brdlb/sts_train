@@ -1,21 +1,17 @@
 import React from 'react';
 import { GameHistory } from '../services/api';
+import { getPlayerName } from '../utils/playerHelpers';
 
 interface GameHistoryModalProps {
   history: GameHistory | null;
   onClose: () => void;
 }
 
-const getPlayerName = (playerId: number, players: GameHistory['players']): string => {
-  if (playerId === 0) return 'You (Human)';
-  return `AI Player ${playerId}`;
-};
-
 const formatActionDescription = (
   action: GameHistory['actions'][0],
   players: GameHistory['players']
 ): { description: string; details?: string } => {
-  const playerName = getPlayerName(action.player_id, players);
+  const playerName = getPlayerName(action.player_id);
   const { action_type, action_data } = action;
 
   if (action_type === 'bid') {
@@ -53,70 +49,25 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-      }}
+      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[1000]"
       onClick={onClose}
     >
       <div
-        style={{
-          backgroundColor: 'white',
-          borderRadius: '8px',
-          padding: '20px',
-          maxWidth: '800px',
-          maxHeight: '90vh',
-          width: '90%',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
+        className="bg-white rounded-lg p-5 max-w-4xl max-h-[90vh] w-[90%] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: '20px',
-            flexShrink: 0,
-          }}
-        >
-          <h2 style={{ margin: 0 }}>История игры #{game.id}</h2>
+        <div className="flex justify-between items-center mb-5 flex-shrink-0">
+          <h2 className="m-0 text-2xl font-bold text-gray-800">История игры #{game.id}</h2>
           <button
             onClick={onClose}
-            style={{
-              backgroundColor: '#f44336',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              padding: '8px 16px',
-              cursor: 'pointer',
-              fontSize: '16px',
-            }}
+            className="bg-red-600 hover:bg-red-700 text-white border-none rounded px-4 py-2 cursor-pointer text-base transition-colors"
           >
             ✕ Закрыть
           </button>
         </div>
 
-        <div
-          style={{
-            marginBottom: '20px',
-            padding: '15px',
-            backgroundColor: '#f5f5f5',
-            borderRadius: '5px',
-            flexShrink: 0,
-          }}
-        >
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+        <div className="mb-5 p-4 bg-gray-100 rounded-lg flex-shrink-0">
+          <div className="grid grid-cols-2 gap-2.5">
             <div>
               <strong>Создана:</strong>{' '}
               {game.created_at ? new Date(game.created_at).toLocaleString('ru-RU') : '-'}
@@ -127,46 +78,35 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
             </div>
             <div>
               <strong>Победитель:</strong>{' '}
-              {game.winner !== null ? getPlayerName(game.winner, players) : '-'}
+              {game.winner !== null ? getPlayerName(game.winner) : '-'}
             </div>
             <div>
               <strong>Игроков:</strong> {game.num_players} • <strong>Ходов:</strong> {actions.length}
             </div>
           </div>
-          <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #ddd' }}>
+          <div className="mt-4 pt-4 border-t border-gray-300">
             <strong>Игроки:</strong>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '8px' }}>
+            <div className="flex flex-wrap gap-2.5 mt-2">
               {players
                 .sort((a, b) => a.player_id - b.player_id)
                 .map((player) => (
                   <div
                     key={player.player_id}
-                    style={{
-                      padding: '6px 12px',
-                      backgroundColor: player.player_id === 0 ? '#e3f2fd' : '#f5f5f5',
-                      borderRadius: '4px',
-                      fontSize: '0.9em',
-                    }}
+                    className={`px-3 py-1.5 rounded text-sm ${
+                      player.player_id === 0 ? 'bg-blue-100' : 'bg-gray-100'
+                    }`}
                   >
-                    {getPlayerName(player.player_id, players)}
+                    {getPlayerName(player.player_id)}
                   </div>
                 ))}
             </div>
           </div>
         </div>
 
-        <div
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            border: '1px solid #ccc',
-            borderRadius: '5px',
-            padding: '15px',
-          }}
-        >
-          <h3 style={{ marginTop: 0 }}>Ходы игры</h3>
+        <div className="flex-1 overflow-y-auto border border-gray-300 rounded-lg p-4">
+          <h3 className="mt-0 text-xl font-semibold text-gray-800 mb-4">Ходы игры</h3>
           {actions.length === 0 ? (
-            <div style={{ color: '#666', fontStyle: 'italic' }}>Нет ходов</div>
+            <div className="text-gray-500 italic">Нет ходов</div>
           ) : (
             <div>
               {actions.map((action, index) => {
@@ -174,43 +114,28 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
                 const isHuman = action.player_id === 0;
                 const backgroundColor = isHuman
                   ? index % 2 === 0
-                    ? '#e3f2fd'
-                    : '#bbdefb'
+                    ? 'bg-blue-50'
+                    : 'bg-blue-100'
                   : index % 2 === 0
-                  ? '#f9f9f9'
-                  : '#fff';
+                  ? 'bg-gray-50'
+                  : 'bg-white';
 
                 return (
                   <div
                     key={action.id}
-                    style={{
-                      padding: '12px',
-                      borderBottom: '1px solid #eee',
-                      backgroundColor,
-                      marginBottom: '4px',
-                      borderRadius: '4px',
-                    }}
+                    className={`p-3 border-b border-gray-200 ${backgroundColor} mb-1 rounded`}
                   >
-                    <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                    <div className="font-bold mb-1 text-gray-800">
                       {actionInfo.description}
                     </div>
-                    <div style={{ fontSize: '0.85em', color: '#666' }}>
+                    <div className="text-sm text-gray-600">
                       Ход #{action.turn_number} •{' '}
                       {action.timestamp
                         ? new Date(action.timestamp).toLocaleTimeString('ru-RU')
                         : ''}
                     </div>
                     {action.action_data && Object.keys(action.action_data).length > 0 && (
-                      <div
-                        style={{
-                          fontSize: '0.85em',
-                          color: '#666',
-                          marginTop: '4px',
-                          padding: '8px',
-                          backgroundColor: 'rgba(0, 0, 0, 0.05)',
-                          borderRadius: '4px',
-                        }}
-                      >
+                      <div className="text-sm text-gray-600 mt-1 p-2 bg-black bg-opacity-5 rounded">
                         {action.action_data.quantity !== null &&
                           action.action_data.quantity !== undefined && (
                             <div>

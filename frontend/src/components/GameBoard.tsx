@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { gamesApi, GameState, ExtendedActionHistoryEntry } from '../services/api';
 import Player from './Player';
 import BidControls from './BidControls';
@@ -21,16 +21,115 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   const [modalContent, setModalContent] = useState<{ title: string; body: React.ReactNode } | null>(null);
   const [lastActionHistoryLength, setLastActionHistoryLength] = useState(0);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const isMountedRef = useRef(true);
   
   // Refs for auto-scrolling
   const playerRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const bidControlsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const subscribeToAiTurns = useCallback(() => {
+    // Close any existing connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    setProcessing(true);
+    const eventSource = gamesApi.subscribeToAiTurns(
+      gameId,
+      (data) => {
+        if (data.type === 'ai_turn') {
+          // Update game state with each AI turn
+          if (data.state) {
+            setGameState(data.state);
+            if (data.state.extended_action_history) {
+              setLastActionHistoryLength(data.state.extended_action_history.length);
+            }
+          }
+
+          // Check if game is over
+          if (data.game_over) {
+            setProcessing(false);
+            setGamePhase('game_over');
+            eventSourceRef.current = null;
+            if (data.winner !== undefined) {
+              onGameEnd();
+            }
+          }
+        } else if (data.type === 'done') {
+          // All AI turns completed
+          if (data.state) {
+            setGameState(data.state);
+            if (data.state.extended_action_history) {
+              setLastActionHistoryLength(data.state.extended_action_history.length);
+            }
+          }
+          setProcessing(false);
+          setGamePhase('bidding');
+          eventSourceRef.current = null;
+        } else if (data.type === 'error') {
+          setError(`Error: ${data.error || 'Unknown error'}`);
+          setProcessing(false);
+          setGamePhase('bidding');
+          eventSourceRef.current = null;
+        }
+      },
+      (error) => {
+        console.error('SSE connection error:', error);
+        setError('Connection error while receiving AI turns');
+        setProcessing(false);
+        setGamePhase('bidding');
+        eventSourceRef.current = null;
+      }
+    );
+
+    eventSourceRef.current = eventSource;
+  }, [gameId, onGameEnd]);
+
+  const loadGameState = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    
+    try {
+      const state = await gamesApi.getState(gameId);
+      if (!isMountedRef.current) return;
+      
+      setGameState(state);
+      setLoading(false);
+      setError(null);
+      
+      if (state.extended_action_history) {
+        setLastActionHistoryLength(state.extended_action_history.length);
+      }
+
+      if (state.game_over) {
+        setGamePhase('game_over');
+        onGameEnd();
+      } else if (state.current_player !== 0 && !eventSourceRef.current) {
+        // If it's AI's turn and we're not already subscribed, subscribe to AI turns
+        subscribeToAiTurns();
+      }
+    } catch (err) {
+      if (!isMountedRef.current) return;
+      setError('Failed to load game state');
+      console.error(err);
+      setLoading(false);
+    }
+  }, [gameId, onGameEnd, subscribeToAiTurns]);
+
+  useEffect(() => {
+    if (!isMountedRef.current) return;
+    
     loadGameState();
     // Poll for game state updates (only when not processing AI turns)
     const interval = setInterval(() => {
-      if (!gameState?.game_over && !processing && !eventSourceRef.current) {
+      if (isMountedRef.current && !gameState?.game_over && !processing && !eventSourceRef.current) {
         loadGameState();
       }
     }, 2000); // Poll every 2 seconds
@@ -43,7 +142,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         eventSourceRef.current = null;
       }
     };
-  }, [gameId, gameState?.game_over, processing]);
+  }, [gameId, loadGameState, gameState?.game_over, processing]);
 
   // Check for new challenge/believe results
   useEffect(() => {
@@ -138,30 +237,13 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     return () => clearTimeout(timeoutId);
   }, [gameState?.current_player, gameState?.turn_number]);
 
-  const loadGameState = async () => {
-    try {
-      const state = await gamesApi.getState(gameId);
-      setGameState(state);
-      setLoading(false);
-      setError(null);
-      
-      if (state.extended_action_history) {
-        setLastActionHistoryLength(state.extended_action_history.length);
-      }
-
-      if (state.game_over) {
-        setGamePhase('game_over');
-        onGameEnd();
-      } else if (state.current_player !== 0 && !eventSourceRef.current) {
-        // If it's AI's turn and we're not already subscribed, subscribe to AI turns
-        subscribeToAiTurns();
-      }
-    } catch (err) {
-      setError('Failed to load game state');
-      console.error(err);
-      setLoading(false);
-    }
-  };
+  // Optimize ref callback to avoid unnecessary re-renders
+  // Must be called before any conditional returns to follow Rules of Hooks
+  const setPlayerRef = useCallback((playerId: number) => {
+    return (el: HTMLDivElement | null) => {
+      playerRefs.current[playerId] = el;
+    };
+  }, []);
 
   const handleBid = async (quantity: number, value: number) => {
     if (!gameState || processing) return;
@@ -246,64 +328,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     }
   };
 
-  const subscribeToAiTurns = () => {
-    // Close any existing connection
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
-
-    setProcessing(true);
-    const eventSource = gamesApi.subscribeToAiTurns(
-      gameId,
-      (data) => {
-        if (data.type === 'ai_turn') {
-          // Update game state with each AI turn
-          if (data.state) {
-            setGameState(data.state);
-            if (data.state.extended_action_history) {
-              setLastActionHistoryLength(data.state.extended_action_history.length);
-            }
-          }
-
-          // Check if game is over
-          if (data.game_over) {
-            setProcessing(false);
-            setGamePhase('game_over');
-            eventSourceRef.current = null;
-            if (data.winner !== undefined) {
-              onGameEnd();
-            }
-          }
-        } else if (data.type === 'done') {
-          // All AI turns completed
-          if (data.state) {
-            setGameState(data.state);
-            if (data.state.extended_action_history) {
-              setLastActionHistoryLength(data.state.extended_action_history.length);
-            }
-          }
-          setProcessing(false);
-          setGamePhase('bidding');
-          eventSourceRef.current = null;
-        } else if (data.type === 'error') {
-          setError(`Error: ${data.error || 'Unknown error'}`);
-          setProcessing(false);
-          setGamePhase('bidding');
-          eventSourceRef.current = null;
-        }
-      },
-      (error) => {
-        console.error('SSE connection error:', error);
-        setError('Connection error while receiving AI turns');
-        setProcessing(false);
-        setGamePhase('bidding');
-        eventSourceRef.current = null;
-      }
-    );
-
-    eventSourceRef.current = eventSource;
-  };
 
   if (loading) {
     return (
@@ -394,7 +418,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         <div className="w-full flex flex-col justify-start space-y-4">
           {displayPlayers.map((playerId) => (
             <Player
-              ref={el => { playerRefs.current[playerId] = el; }}
+              ref={setPlayerRef(playerId)}
               key={playerId}
               playerId={playerId}
               playerName={PLAYER_NAMES[playerId] || `Player ${playerId}`}
@@ -446,14 +470,16 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
               </p>
             </div>
           )}
+        </div>
+      </div>
 
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <GameHistory
-              bidHistory={gameState.bid_history}
-              currentBid={gameState.current_bid}
-              extendedActionHistory={gameState.extended_action_history}
-            />
-          </div>
+      <div className="w-full max-w-7xl mt-4 z-10">
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <GameHistory
+            bidHistory={gameState.bid_history}
+            currentBid={gameState.current_bid}
+            extendedActionHistory={gameState.extended_action_history}
+          />
         </div>
       </div>
 

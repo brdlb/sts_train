@@ -2,13 +2,15 @@ import React, { useState } from 'react';
 import { ModelSelector } from './components/ModelSelector';
 import { GameBoard } from './components/GameBoard';
 import { Statistics } from './components/Statistics';
+import { ToastProvider, useToastContext } from './contexts/ToastContext';
 import { gamesApi } from './services/api';
 
 type View = 'select' | 'game' | 'statistics';
 
-function App() {
+function AppContent() {
   const [currentView, setCurrentView] = useState<View>('select');
   const [currentGameId, setCurrentGameId] = useState<string | null>(null);
+  const { showToast } = useToastContext();
 
   const handleStartGame = async (modelPaths: string[]) => {
     try {
@@ -17,7 +19,7 @@ function App() {
       setCurrentView('game');
     } catch (error) {
       console.error('Failed to start game:', error);
-      alert('Failed to start game. Please try again.');
+      showToast('Failed to start game. Please try again.', 'error');
     }
   };
 
@@ -62,6 +64,14 @@ function App() {
         {currentView === 'statistics' && <Statistics key="statistics" />}
       </main>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ToastProvider>
+      <AppContent />
+    </ToastProvider>
   );
 }
 

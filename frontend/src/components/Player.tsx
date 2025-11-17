@@ -34,9 +34,6 @@ const Player = forwardRef<HTMLDivElement, PlayerProps>(({
   const isRevealing = gamePhase === 'reveal' || gamePhase === 'round_over';
   const hasLost = diceCount === 0;
   
-  // Find this player's last bid in history
-  const playerLastBidInHistory = [...bidHistory].reverse().find(h => h[0] === playerId);
-  
   // Get player color
   const playerColor = PLAYER_COLORS[playerId % PLAYER_COLORS.length];
   
@@ -83,21 +80,6 @@ const Player = forwardRef<HTMLDivElement, PlayerProps>(({
           <span className="mr-1">x</span>
           <Dice
             value={lastBid[1] as 1 | 2 | 3 | 4 | 5 | 6}
-            size={8}
-            color="bg-transparent"
-            dotColor="bg-white"
-            starColor="text-white"
-            borderColor="border-white"
-            dotSizeClass="w-1.5 h-1.5"
-            starSizeClass="text-2xl"
-          />
-        </div>
-      ) : playerLastBidInHistory ? (
-         <div className="absolute -top-2 -right-2 bg-gray-500 text-white pl-3 pr-2 py-2 rounded-full text-4xl font-bold shadow-lg opacity-60 flex items-center">
-          <span className="mr-0.5">{playerLastBidInHistory[1]}</span>
-          <span className="mr-1">x</span>
-           <Dice
-            value={playerLastBidInHistory[2] as 1 | 2 | 3 | 4 | 5 | 6}
             size={8}
             color="bg-transparent"
             dotColor="bg-white"

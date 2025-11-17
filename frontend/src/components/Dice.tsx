@@ -2,11 +2,6 @@ import React from 'react';
 
 type DiceValue = 1 | 2 | 3 | 4 | 5 | 6;
 
-// Helper function to combine class names
-const clsx = (...classes: (string | boolean | undefined)[]): string => {
-  return classes.filter(Boolean).join(' ');
-};
-
 interface DiceProps {
   value: DiceValue;
   size?: number;
