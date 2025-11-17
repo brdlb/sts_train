@@ -4,6 +4,7 @@ Game state class for Perudo game.
 
 from typing import List, Optional, Tuple
 import numpy as np
+from ..utils.helpers import encode_bid
 
 
 class GameState:
@@ -33,7 +34,10 @@ class GameState:
 
         # Public information
         self.current_bid: Optional[Tuple[int, int]] = None  # (quantity, value)
-        self.bid_history: List[Tuple[int, int, int]] = []  # (player, quantity, value)
+        self.bid_history: List[Tuple[int, int]] = []  # (action_type, encoded_bid)
+        # action_type: 0=bid, 1=challenge, 2=believe
+        # encoded_bid: encoded quantity and value via encode_bid(quantity, value)
+        self.last_bid_player_id: Optional[int] = None  # Track last player who made a bid
         self.current_player: int = 0
 
         # Number of dice for each player (public information)
@@ -67,6 +71,7 @@ class GameState:
         self.player_dice = []
         self.current_bid = None
         self.bid_history = []
+        self.last_bid_player_id = None
         # Randomly select starting player from all available players
         if seed is not None:
             # Use local random generator with seed for reproducible selection
@@ -148,7 +153,10 @@ class GameState:
                 return False
 
         self.current_bid = (quantity, value)
-        self.bid_history.append((player_id, quantity, value))
+        # Encode bid: action_type=0 for bid, encoded_bid = encode_bid(quantity, value)
+        encoded = encode_bid(quantity, value, max_quantity=30)  # max_quantity is typically 30
+        self.bid_history.append((0, encoded))
+        self.last_bid_player_id = player_id
         return True
 
     def _is_bid_higher(self, q1: int, v1: int, q2: int, v2: int) -> bool:
@@ -238,11 +246,8 @@ class GameState:
         if not self.bid_history:
             return False, 0, 0
 
-        # The player who made the bid is the last one in the history
-        previous_player = self.bid_history[-1][0]
-
         # The challenger cannot be the one who made the bid
-        if previous_player == challenger_id:
+        if self.last_bid_player_id == challenger_id:
             # This case should not happen in a well-formed game
             return False, 0, 0
 
@@ -255,6 +260,28 @@ class GameState:
         challenge_success = total_count < quantity
 
         return challenge_success, total_count, quantity
+    
+    def add_challenge_to_history(self) -> None:
+        """
+        Add challenge action to bid_history.
+        
+        Uses encoded_bid from current_bid.
+        """
+        if self.current_bid is not None:
+            quantity, value = self.current_bid
+            encoded = encode_bid(quantity, value, max_quantity=30)
+            self.bid_history.append((1, encoded))  # action_type=1 for challenge
+    
+    def add_believe_to_history(self) -> None:
+        """
+        Add believe action to bid_history.
+        
+        Uses encoded_bid from current_bid.
+        """
+        if self.current_bid is not None:
+            quantity, value = self.current_bid
+            encoded = encode_bid(quantity, value, max_quantity=30)
+            self.bid_history.append((2, encoded))  # action_type=2 for believe
 
     def call_believe(self, caller_id: int) -> Tuple[bool, int]:
         """

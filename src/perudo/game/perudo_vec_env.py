@@ -854,11 +854,21 @@ class PerudoMultiAgentVecEnv(VecEnv):
         else:
             episode_length = self.learning_agent_episode_length[env_idx]
         
+        # Calculate bid history usage percentage
+        bid_history = env.game_state.bid_history
+        # Count valid actions (encoded_bid > 0 indicates valid action, padding has encoded_bid = 0)
+        # action_type: 0=bid, 1=challenge, 2=believe
+        valid_bids = [action for action in bid_history if action[1] > 0]  # encoded_bid > 0
+        history_length = len(valid_bids)
+        max_history_length = env.max_history_length
+        # Calculate percentage: min(history_length, max_history_length) / max_history_length * 100
+        history_usage_percent = min(history_length, max_history_length) / max_history_length * 100.0
+        
         # Print episode summary
         learning_agent_won = winner == learning_agent_id
         win_status = "WIN" if learning_agent_won else "DEFEAT"
         dice_str = str(list(env.game_state.player_dice_count))
-        print(f"{win_status} | reward: {final_reward:.2f} | stats: bids={bid_count}, challenges={challenge_count}, believe={believe_count}, invalid={invalid_action_count} | dice: {dice_str}")
+        print(f"{win_status} | reward: {final_reward:.2f} | stats: bids={bid_count}, challenges={challenge_count}, believe={believe_count}, invalid={invalid_action_count} | dice: {dice_str} | history: {history_length}/{max_history_length} ({history_usage_percent:.1f}%)")
         
         # Create episode info dict
         info = {
@@ -872,9 +882,13 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 "believe_count": believe_count,
                 "invalid_action_count": invalid_action_count,
                 "winner": winner,
+                "history_length": history_length,
+                "history_usage_percent": history_usage_percent,
             },
             "episode_reward": float(final_reward),
             "episode_length": int(episode_length),
+            "history_length": history_length,
+            "history_usage_percent": history_usage_percent,
         }
         
         return info

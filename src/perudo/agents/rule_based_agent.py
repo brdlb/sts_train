@@ -22,7 +22,7 @@ from .bot_logic import (
     get_personality_decision,
 )
 from .bot_personalities import BOT_PERSONALITIES
-from ..utils.helpers import bid_to_action
+from ..utils.helpers import bid_to_action, decode_bid
 
 
 class RuleBasedAgent(BaseAgent):
@@ -229,22 +229,38 @@ class RuleBasedAgent(BaseAgent):
         self.previous_observation = observation.copy() if isinstance(observation, dict) else observation
         
         # Parse bid history
-        # Format: (max_history_length, 3) - (player_id, quantity, value)
+        # Format: (max_history_length, 2) - (action_type, encoded_bid)
+        # action_type: 0=bid, 1=challenge, 2=believe
+        # encoded_bid: encoded quantity and value via encode_bid(quantity, value)
         # History is stored with most recent first
         # Only add bids from current round to round_bid_history
         round_bid_history_list = []
         last_bidder_index = None
         
+        # Track player order for approximate player_id assignment
+        # We'll use a simple approach: assume bids are made in player order
+        # This is approximate but necessary since player_id is not in observation
+        player_order_counter = 0
+        
         for i in range(self.max_history_length):
-            if bid_history[i][0] >= 0 and bid_history[i][1] > 0:  # Valid entry
-                player_id = int(bid_history[i][0])
-                quantity = int(bid_history[i][1])
-                value = int(bid_history[i][2])
+            action_type = int(bid_history[i][0])
+            encoded_bid = int(bid_history[i][1])
+            
+            # Only process bids (action_type == 0)
+            if action_type == 0 and encoded_bid >= 0:
+                # Decode bid
+                quantity, value = decode_bid(encoded_bid, self.max_quantity)
+                
+                # Use approximate player_id based on order in history
+                # This is not perfect but necessary since player_id is not available
+                # We'll use a simple counter that cycles through players
+                approximate_player_id = player_order_counter % self.max_players
+                player_order_counter += 1
                 
                 # Add to round bid history (only if it's a new bid not already in history)
                 bid_entry = {
                     "bid": Bid(quantity=quantity, face=value),
-                    "bidder_id": f"player_{player_id}",
+                    "bidder_id": f"player_{approximate_player_id}",
                 }
                 # Check if this bid is already in round_bid_history
                 if not any(
@@ -255,7 +271,7 @@ class RuleBasedAgent(BaseAgent):
                 
                 # Track last bidder (first valid entry is most recent)
                 if last_bidder_index is None:
-                    last_bidder_index = player_id
+                    last_bidder_index = approximate_player_id
         
         # Update round bid history (append new bids, keep chronological order)
         # Reverse to get chronological order (oldest first)
@@ -352,15 +368,21 @@ class RuleBasedAgent(BaseAgent):
         prev_bid_history = previous_obs["bid_history"]
         
         # Find the last bid from previous round
+        # Format: (action_type, encoded_bid)
         last_bid = None
         last_bidder_id = None
         for i in range(self.max_history_length):
-            if prev_bid_history[i][1] > 0:  # Valid bid
-                player_id = int(prev_bid_history[i][0])
-                quantity = int(prev_bid_history[i][1])
-                value = int(prev_bid_history[i][2])
-                last_bid = {"quantity": quantity, "value": value, "player_id": player_id}
-                last_bidder_id = f"player_{player_id}"
+            action_type = int(prev_bid_history[i][0])
+            encoded_bid = int(prev_bid_history[i][1])
+            
+            # Only process bids (action_type == 0)
+            if action_type == 0 and encoded_bid >= 0:
+                # Decode bid
+                quantity, value = decode_bid(encoded_bid, self.max_quantity)
+                # Use approximate player_id (we don't have exact player_id in observation)
+                approximate_player_id = 0  # Default to 0, actual player_id not available
+                last_bid = {"quantity": quantity, "value": value, "player_id": approximate_player_id}
+                last_bidder_id = f"player_{approximate_player_id}"
                 break
         
         if last_bid is None:

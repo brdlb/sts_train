@@ -153,11 +153,11 @@ class PerudoRules:
         Returns:
             Tuple (ID of player who loses die, number of dice lost)
         """
-        # The player who made the bid is the last one in the history
-        if not game_state.bid_history:
+        # The player who made the bid is tracked in last_bid_player_id
+        if not game_state.bid_history or game_state.last_bid_player_id is None:
             return challenger_id, 1
 
-        previous_player = game_state.bid_history[-1][0]
+        previous_player = game_state.last_bid_player_id
 
         # If challenge succeeded (bid was wrong), player who made bid loses die
         # If challenge failed (bid was correct), challenger loses die

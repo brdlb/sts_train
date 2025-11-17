@@ -10,6 +10,8 @@ from .callbacks import (
     AdvantageNormalizationCallback,
     AdaptiveEntropyCallback,
     SelfPlayTrainingCallback,
+    ModelUpdateProgressCallback,
+    WinnerTrajectoryCollectorCallback,
 )
 from .utils import (
     get_device,
@@ -30,6 +32,8 @@ __all__ = [
     "AdvantageNormalizationCallback",
     "AdaptiveEntropyCallback",
     "SelfPlayTrainingCallback",
+    "ModelUpdateProgressCallback",
+    "WinnerTrajectoryCollectorCallback",
     "get_device",
     "linear_schedule",
     "find_latest_model",

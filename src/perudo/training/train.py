@@ -23,7 +23,13 @@ from .config import Config, DEFAULT_CONFIG
 from .opponent_pool import OpponentPool
 from .rule_based_pool import RuleBasedOpponentPool
 from ..agents.transformer_extractor import TransformerFeaturesExtractor
-from .callbacks import AdvantageNormalizationCallback, AdaptiveEntropyCallback, SelfPlayTrainingCallback
+from .callbacks import (
+    AdvantageNormalizationCallback,
+    AdaptiveEntropyCallback,
+    SelfPlayTrainingCallback,
+    ModelUpdateProgressCallback,
+    WinnerTrajectoryCollectorCallback,
+)
 from .debug import DebugModeManager, get_debug_mode, set_debug_mode
 from .utils import get_device, linear_schedule, find_latest_model, restore_model_from_opponent_pool
 
@@ -313,9 +319,9 @@ class SelfPlayTraining:
                         dropout=getattr(self.config.training, 'transformer_dropout', 0.1),
                     ),
                     # Enhanced network architectures for policy and value networks
-                    # Value network receives 256-dim features, needs stronger architecture
+                    # Value network receives 128-dim features, needs stronger architecture
                     # Format: list with dict specifying separate architectures for pi and vf
-                    net_arch=[dict(pi=[192, 128], vf=[256, 128])],
+                    net_arch=[dict(pi=[96, 64], vf=[128, 64])],
                 )
             else:
                 policy_kwargs = self.config.training.policy_kwargs
@@ -458,6 +464,21 @@ class SelfPlayTraining:
             debug=False  # Enable debug mode by default
         )
         callbacks.append(selfplay_callback)
+        
+        # Model update progress callback
+        model_update_callback = ModelUpdateProgressCallback(verbose=self.config.training.verbose)
+        callbacks.append(model_update_callback)
+        
+        # Winner trajectory collector callback (for botplay mode)
+        if self.training_mode == "botplay":
+            winner_trajectories_dir = os.path.join(self.config.training.model_dir, "winner_trajectories")
+            winner_collector = WinnerTrajectoryCollectorCallback(
+                data_dir=winner_trajectories_dir,
+                verbose=self.config.training.verbose,
+            )
+            callbacks.append(winner_collector)
+            logger.info(f"Winner trajectory collection enabled for botplay mode")
+            logger.info(f"  Trajectories will be saved to: {winner_trajectories_dir}")
         
         # Checkpoint callback
         checkpoint_callback = CheckpointCallback(

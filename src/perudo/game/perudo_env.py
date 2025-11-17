@@ -5,7 +5,7 @@ Gymnasium environment for Perudo game.
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-from typing import Dict, Tuple, Optional, Any
+from typing import Dict, Tuple, Optional, Any, List
 
 from .game_state import GameState
 from .rules import PerudoRules
@@ -86,8 +86,9 @@ class PerudoEnv(gym.Env):
         )
 
         # Define observation space as Dict for transformer architecture
-        # bid_history: sequence of bids (max_history_length, 3) - (player_id, quantity, value)
-        # This preserves turn order context, allowing agents to understand who made each bid
+        # bid_history: sequence of actions (max_history_length, 2) - (action_type, encoded_bid)
+        # action_type: 0=bid, 1=challenge, 2=believe
+        # encoded_bid: encoded quantity and value via encode_bid(quantity, value)
         # static_info: static information (agent_id, current_bid, dice_count, current_player, palifico, believe, player_dice)
         
         # Calculate static_info size
@@ -106,7 +107,7 @@ class PerudoEnv(gym.Env):
         action_size = 2 + max_quantity * 6
         self.observation_space = spaces.Dict({
             "bid_history": spaces.Box(
-                low=0, high=100, shape=(self.max_history_length, 3), dtype=np.int32
+                low=0, high=100, shape=(self.max_history_length, 2), dtype=np.int32
             ),
             "static_info": spaces.Box(
                 low=0, high=100, shape=(static_info_size,), dtype=np.float32
@@ -144,6 +145,11 @@ class PerudoEnv(gym.Env):
         # Track invalid action attempts (for compatibility, not used for retry anymore)
         self.invalid_action_attempts = 0
         self.invalid_action_penalty_accumulated = 0.0
+        
+        # Track trajectories for all players (for winner trajectory collection)
+        # Format: Dict[player_id, List[Dict]] where each Dict contains:
+        # {"observation": Dict, "action": int, "reward": float, "action_mask": np.ndarray}
+        self.player_trajectories: Dict[int, List[Dict]] = {}
 
     def reset(
         self, seed: Optional[int] = None, options: Optional[Dict] = None
@@ -209,6 +215,9 @@ class PerudoEnv(gym.Env):
         # Reset invalid action tracking
         self.invalid_action_attempts = 0
         self.invalid_action_penalty_accumulated = 0.0
+        
+        # Reset player trajectories
+        self.player_trajectories = {}
 
         return observation, info
 
@@ -265,20 +274,37 @@ class PerudoEnv(gym.Env):
             observation = self._get_observation(self.active_player_id)
             return observation, 0.0, False, False, {"error": "Not player's turn"}
 
+        # Get action mask for current player (for trajectory tracking)
+        available_actions = PerudoRules.get_available_actions(self.game_state, self.active_player_id)
+        action_mask = create_action_mask(
+            available_actions, self.action_space.n, self.max_quantity
+        )
+        
+        # Get observation for current player before executing action (for trajectory tracking)
+        observation_before_action = self._get_observation(self.active_player_id)
+        
         # Check action masking for learning agent (player_id=0)
         # This helps diagnose if MaskablePPO is properly using action masks
         # NOTE: This check is useful for debugging, but invalid actions are handled
         # by the environment (penalty and turn pass), so training can continue
         if self.active_player_id == 0:
-            # Get available actions and create mask
-            available_actions = PerudoRules.get_available_actions(self.game_state, self.active_player_id)
-            action_mask = create_action_mask(
-                available_actions, self.action_space.n, self.max_quantity
-            )
             # Check if the selected action is allowed by the mask
             if not action_mask[action]:
                 # Count invalid actions for statistics
                 self.episode_invalid_action_count += 1
+        
+        # Initialize trajectory for this player if needed
+        if self.active_player_id not in self.player_trajectories:
+            self.player_trajectories[self.active_player_id] = []
+        
+        # Store trajectory entry (reward will be updated after action execution)
+        trajectory_entry = {
+            "observation": observation_before_action,
+            "action": action,
+            "reward": 0.0,  # Will be updated after action execution
+            "action_mask": action_mask.copy(),
+        }
+        self.player_trajectories[self.active_player_id].append(trajectory_entry)
 
         # Execute action
         reward = 0.0
@@ -375,6 +401,8 @@ class PerudoEnv(gym.Env):
                 challenge_success, actual_count, bid_quantity = (
                     self.game_state.challenge_bid(self.active_player_id)
                 )
+                # Add challenge to history
+                self.game_state.add_challenge_to_history()
                 loser_id, dice_lost = PerudoRules.process_challenge_result(
                     self.game_state,
                     self.active_player_id,
@@ -390,8 +418,8 @@ class PerudoEnv(gym.Env):
                 # (opponent challenged and failed)
                 agent_id = 0
                 agent_defended_bid = False
-                if self.game_state.bid_history:
-                    bid_maker_id = self.game_state.bid_history[-1][0]
+                if self.game_state.last_bid_player_id is not None:
+                    bid_maker_id = self.game_state.last_bid_player_id
                     # Agent made the bid, challenge failed (opponent was wrong), agent didn't lose dice
                     if (bid_maker_id == agent_id and 
                         not challenge_success and 
@@ -498,6 +526,8 @@ class PerudoEnv(gym.Env):
                 believe_success, actual_count = self.game_state.call_believe(
                     self.active_player_id
                 )
+                # Add believe to history
+                self.game_state.add_believe_to_history()
                 bid_quantity = self.game_state.current_bid[0] if self.game_state.current_bid else 0
                 loser_id, dice_lost, next_round_starter = PerudoRules.process_believe_result(
                     self.game_state,
@@ -533,8 +563,8 @@ class PerudoEnv(gym.Env):
                 # (opponent called believe and failed)
                 agent_id = 0
                 agent_defended_bid = False
-                if self.game_state.bid_history:
-                    bid_maker_id = self.game_state.bid_history[-1][0]
+                if self.game_state.last_bid_player_id is not None:
+                    bid_maker_id = self.game_state.last_bid_player_id
                     # Agent made the bid, believe failed (opponent was wrong), agent didn't lose dice
                     if (bid_maker_id == agent_id and 
                         not believe_success and 
@@ -661,6 +691,10 @@ class PerudoEnv(gym.Env):
             "actual_count": actual_count_info,  # Actual dice count for challenge/believe
             "loser_id": loser_id_info,  # Player who lost dice (if any)
         }
+
+        # Update reward in trajectory entry (last entry for current player)
+        if self.active_player_id in self.player_trajectories and len(self.player_trajectories[self.active_player_id]) > 0:
+            self.player_trajectories[self.active_player_id][-1]["reward"] = reward
 
         # Get new observation
         observation = self._get_observation(self.active_player_id)
@@ -836,6 +870,22 @@ class PerudoEnv(gym.Env):
             Observation dictionary with 'bid_history' and 'static_info' keys
         """
         return self._get_observation(player_id)
+    
+    def get_player_trajectory(self, player_id: int) -> List[Dict]:
+        """
+        Get trajectory for a specific player.
+        
+        Args:
+            player_id: ID of the player
+            
+        Returns:
+            List of trajectory entries, each containing:
+            - observation: Dict with observation data
+            - action: int action code
+            - reward: float reward value
+            - action_mask: np.ndarray action mask
+        """
+        return self.player_trajectories.get(player_id, [])
 
     def _check_round_end_reward(self, loser_id: int, dice_lost: int, action_type: Optional[str] = None) -> float:
         """

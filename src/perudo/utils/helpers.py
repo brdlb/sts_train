@@ -100,7 +100,7 @@ def bid_to_action(quantity: int, value: int, max_quantity: int = 30) -> int:
 
 def create_observation_dict(
     current_bid: Optional[Tuple[int, int]],
-    bid_history: List[Tuple[int, int, int]],
+    bid_history: List[Tuple[int, int]],
     player_dice_count: List[int],
     current_player: int,
     palifico_active: List[bool],
@@ -118,7 +118,9 @@ def create_observation_dict(
     
     Args:
         current_bid: Current bid (quantity, value)
-        bid_history: Bid history as list of (player_id, quantity, value)
+        bid_history: Action history as list of (action_type, encoded_bid)
+            action_type: 0=bid, 1=challenge, 2=believe
+            encoded_bid: encoded quantity and value via encode_bid(quantity, value)
         player_dice_count: Number of dice for each player
         current_player: Current player
         palifico_active: Palifico flags for each player
@@ -133,18 +135,17 @@ def create_observation_dict(
     
     Returns:
         Dictionary with 'bid_history' and 'static_info' keys
-        bid_history shape: (max_history_length, 3) - (player_id, quantity, value)
+        bid_history shape: (max_history_length, 2) - (action_type, encoded_bid)
     """
-    # Build bid_history sequence (max_history_length, 3) - player_id, quantity, value
-    # This preserves information about who made each bid, which is crucial for understanding
-    # player strategies and turn order context
-    bid_history_array = np.zeros((max_history_length, 3), dtype=np.int32)
+    # Build bid_history sequence (max_history_length, 2) - action_type, encoded_bid
+    # This preserves information about all actions (bids, challenges, believes) in the game
+    bid_history_array = np.zeros((max_history_length, 2), dtype=np.int32)
     for i in range(max_history_length):
         # Take from end of history (most recent first)
         history_idx = len(bid_history) - 1 - i
         if history_idx >= 0:
-            player_id, quantity, value = bid_history[history_idx]
-            bid_history_array[i] = [player_id, quantity, value]
+            action_type, encoded_bid = bid_history[history_idx]
+            bid_history_array[i] = [action_type, encoded_bid]
         # else: padding (already zeros)
     
     # Build static_info vector
@@ -202,7 +203,7 @@ def create_observation_dict(
 
 def create_observation_vector(
     current_bid: Optional[Tuple[int, int]],
-    bid_history: List[Tuple[int, int, int]],
+    bid_history: List[Tuple[int, int]],
     player_dice_count: List[int],
     current_player: int,
     palifico_active: List[bool],
@@ -218,7 +219,9 @@ def create_observation_vector(
 
     Args:
         current_bid: Current bid (quantity, value)
-        bid_history: Bid history
+        bid_history: Action history as list of (action_type, encoded_bid)
+            action_type: 0=bid, 1=challenge, 2=believe
+            encoded_bid: encoded quantity and value via encode_bid(quantity, value)
         player_dice_count: Number of dice for each player
         current_player: Current player
         palifico_active: Palifico flags for each player
@@ -250,14 +253,14 @@ def create_observation_vector(
     else:
         obs_parts.append([0, 0])
 
-    # Bid history (last N bids, each = 3 values: player, quantity, value)
+    # Action history (last N actions, each = 2 values: action_type, encoded_bid)
     history_vector = []
     for i in range(history_length):
         if i < len(bid_history):
-            player_id, quantity, value = bid_history[-(i + 1)]  # Take from end
-            history_vector.extend([player_id, quantity, value])
+            action_type, encoded_bid = bid_history[-(i + 1)]  # Take from end
+            history_vector.extend([action_type, encoded_bid])
         else:
-            history_vector.extend([0, 0, 0])
+            history_vector.extend([0, 0])  # Padding: action_type=0, encoded_bid=0
     obs_parts.append(history_vector)
 
     # Number of dice for each player (max_players values)

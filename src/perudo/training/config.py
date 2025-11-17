@@ -82,10 +82,10 @@ class TrainingConfig:
     policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
     policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
     device: Optional[str] = None 
-    opponent_device: Optional[str] = "cpu"  
+    opponent_device: Optional[str] = "cuda"  
     learning_rate: float = 3.0e-4  
-    n_steps: int = 8192
-    batch_size: int = 2048  
+    n_steps: int = 10240  # Increased for better training stability with optimized model
+    batch_size: int = 2048  # Increased as model is now much lighter (8x smaller history and simpler topology)
     n_epochs: int = 10  
     gamma: float = 0.99
     gae_lambda: float = 0.95
@@ -101,13 +101,13 @@ class TrainingConfig:
     entropy_adjustment_rate: float = 0.008  # Rate of ent_coef adjustment per update (slower)
     entropy_max_coef: float = 0.4  # Maximum allowed ent_coef value (increased to match new ent_coef)  
     
-    # Transformer parameters (optimized for sequence length 40)
-    transformer_features_dim: int = 256  # Increased to handle richer feature information
-    transformer_num_layers: int = 3  # Increased from 2 for better expressiveness
-    transformer_num_heads: int = 8  # Increased for better attention analysis (128/8=16 per head)
-    transformer_embed_dim: int = 128  # Increased to provide more "space" for representing each move
-    transformer_dim_feedforward: int = 512  # Standard practice: 128 * 4 = 512
-    transformer_history_length: int = 40  # Increased to cover full game history
+    # Transformer parameters (optimized for sequence length 12)
+    transformer_features_dim: int = 128  # Output feature dimension
+    transformer_num_layers: int = 1  # Single layer sufficient for very short sequences (12 events)
+    transformer_num_heads: int = 4  # Reduced to 4 for efficient attention on sequences (12/4=3 events per head)
+    transformer_embed_dim: int = 96  # Sufficient for short sequence representations
+    transformer_dim_feedforward: int = 384  # Standard practice: 96 * 4 = 384
+    transformer_history_length: int = 12  # Reduced to 12 events for maximum efficiency and speed
     transformer_dropout: float = 0.1  # Explicit dropout parameter
 
     # Training parameters
