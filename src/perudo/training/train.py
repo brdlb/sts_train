@@ -191,6 +191,7 @@ class SelfPlayTraining:
         
         # Create vectorized environment
         debug_moves = getattr(self.config.training, 'debug_moves', False)
+        collect_trajectories = getattr(self.config.training, 'collect_trajectories', False)
         vec_env_raw = PerudoMultiAgentVecEnv(
             num_envs=self.num_envs,
             num_players=self.num_players,
@@ -208,6 +209,7 @@ class SelfPlayTraining:
             rule_based_pool=self.rule_based_pool,
             training_mode=self.training_mode,
             mixed_mode_ratio=self.mixed_mode_ratio,
+            collect_trajectories=collect_trajectories,
         )
         
         # Wrap with ActionMaskVecMonitor for logging and action mask forwarding
@@ -469,15 +471,16 @@ class SelfPlayTraining:
         model_update_callback = ModelUpdateProgressCallback(verbose=self.config.training.verbose)
         callbacks.append(model_update_callback)
         
-        # Winner trajectory collector callback (for botplay mode)
-        if self.training_mode == "botplay":
+        # Winner trajectory collector callback (only if enabled in config)
+        collect_trajectories = getattr(self.config.training, 'collect_trajectories', False)
+        if collect_trajectories:
             winner_trajectories_dir = os.path.join(self.config.training.model_dir, "winner_trajectories")
             winner_collector = WinnerTrajectoryCollectorCallback(
                 data_dir=winner_trajectories_dir,
                 verbose=self.config.training.verbose,
             )
             callbacks.append(winner_collector)
-            logger.info(f"Winner trajectory collection enabled for botplay mode")
+            logger.info(f"Winner trajectory collection enabled")
             logger.info(f"  Trajectories will be saved to: {winner_trajectories_dir}")
         
         # Checkpoint callback

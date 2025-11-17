@@ -130,6 +130,9 @@ class TrainingConfig:
     )  # Distribution of bot difficulty levels
     mixed_mode_ratio: float = 0.5  # Ratio of botplay in mixed mode (0.0-1.0)
 
+    # Trajectory collection
+    collect_trajectories: bool = False  # Enable collection and saving of winner trajectories (for imitation learning)
+    
     # Other
     verbose: int = 1
     seed: Optional[int] = None

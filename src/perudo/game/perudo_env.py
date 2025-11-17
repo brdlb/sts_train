@@ -37,6 +37,7 @@ class PerudoEnv(gym.Env):
         min_players: int = 3,
         max_players: int = 8,
         reward_config: Optional[RewardConfig] = None,
+        collect_trajectories: bool = False,  # Enable trajectory collection for imitation learning
     ):
         """
         Initialize Perudo environment.
@@ -53,6 +54,7 @@ class PerudoEnv(gym.Env):
             min_players: Minimum number of players (used when random_num_players=True)
             max_players: Maximum number of players (used when random_num_players=True)
             reward_config: Reward configuration (uses DEFAULT_CONFIG.reward if not provided)
+            collect_trajectories: Enable trajectory collection for imitation learning
         """
         super().__init__()
 
@@ -147,9 +149,11 @@ class PerudoEnv(gym.Env):
         self.invalid_action_penalty_accumulated = 0.0
         
         # Track trajectories for all players (for winner trajectory collection)
+        # Only enabled if collect_trajectories=True to save memory
         # Format: Dict[player_id, List[Dict]] where each Dict contains:
         # {"observation": Dict, "action": int, "reward": float, "action_mask": np.ndarray}
-        self.player_trajectories: Dict[int, List[Dict]] = {}
+        self.collect_trajectories = collect_trajectories
+        self.player_trajectories: Dict[int, List[Dict]] = {} if collect_trajectories else {}
 
     def reset(
         self, seed: Optional[int] = None, options: Optional[Dict] = None
@@ -216,8 +220,9 @@ class PerudoEnv(gym.Env):
         self.invalid_action_attempts = 0
         self.invalid_action_penalty_accumulated = 0.0
         
-        # Reset player trajectories
-        self.player_trajectories = {}
+        # Reset player trajectories (only if collection is enabled)
+        if self.collect_trajectories:
+            self.player_trajectories = {}
 
         return observation, info
 
@@ -293,18 +298,19 @@ class PerudoEnv(gym.Env):
                 # Count invalid actions for statistics
                 self.episode_invalid_action_count += 1
         
-        # Initialize trajectory for this player if needed
-        if self.active_player_id not in self.player_trajectories:
-            self.player_trajectories[self.active_player_id] = []
-        
-        # Store trajectory entry (reward will be updated after action execution)
-        trajectory_entry = {
-            "observation": observation_before_action,
-            "action": action,
-            "reward": 0.0,  # Will be updated after action execution
-            "action_mask": action_mask.copy(),
-        }
-        self.player_trajectories[self.active_player_id].append(trajectory_entry)
+        # Initialize trajectory for this player if needed (only if collection is enabled)
+        if self.collect_trajectories:
+            if self.active_player_id not in self.player_trajectories:
+                self.player_trajectories[self.active_player_id] = []
+            
+            # Store trajectory entry (reward will be updated after action execution)
+            trajectory_entry = {
+                "observation": observation_before_action,
+                "action": action,
+                "reward": 0.0,  # Will be updated after action execution
+                "action_mask": action_mask.copy(),
+            }
+            self.player_trajectories[self.active_player_id].append(trajectory_entry)
 
         # Execute action
         reward = 0.0
@@ -692,8 +698,8 @@ class PerudoEnv(gym.Env):
             "loser_id": loser_id_info,  # Player who lost dice (if any)
         }
 
-        # Update reward in trajectory entry (last entry for current player)
-        if self.active_player_id in self.player_trajectories and len(self.player_trajectories[self.active_player_id]) > 0:
+        # Update reward in trajectory entry (last entry for current player, only if collection is enabled)
+        if self.collect_trajectories and self.active_player_id in self.player_trajectories and len(self.player_trajectories[self.active_player_id]) > 0:
             self.player_trajectories[self.active_player_id][-1]["reward"] = reward
 
         # Get new observation

@@ -12,7 +12,12 @@ from typing import List, Dict, Tuple, Optional, Any
 import logging
 from pathlib import Path
 
+import torch
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+
 from sb3_contrib import MaskablePPO
+from sb3_contrib.common.maskable.distributions import MaskableDistribution
 from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 from stable_baselines3.common.callbacks import BaseCallback
 
@@ -21,6 +26,7 @@ from .train import ActionMaskVecMonitor
 from ..agents.transformer_extractor import TransformerFeaturesExtractor
 from .config import Config, DEFAULT_CONFIG
 from .utils import get_device
+from .bc_dataset import TrajectoryDataset, collate_batch
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -186,6 +192,307 @@ def create_model_from_config(
     return model
 
 
+def train_bc_policy(
+    model: MaskablePPO,
+    observations: List[Dict[str, np.ndarray]],
+    actions: List[int],
+    action_masks: List[Optional[np.ndarray]],
+    n_epochs: int = 10,
+    batch_size: int = 256,
+    learning_rate: float = 3e-4,
+    validation_split: float = 0.2,
+    verbose: int = 1,
+    tensorboard_log: Optional[str] = None,
+) -> Dict[str, List[float]]:
+    """
+    Train policy network using behavioral cloning on expert trajectories.
+    
+    Args:
+        model: MaskablePPO model (only policy network will be trained)
+        observations: List of observation dictionaries
+        actions: List of expert actions
+        action_masks: List of action masks (can contain None)
+        n_epochs: Number of training epochs
+        batch_size: Batch size for training
+        learning_rate: Learning rate for optimizer
+        validation_split: Fraction of data to use for validation
+        verbose: Verbosity level
+        tensorboard_log: Optional TensorBoard log directory
+        
+    Returns:
+        Dictionary with training history (train_loss, val_loss, train_acc, val_acc)
+    """
+    device = model.device
+    
+    # Create dataset
+    dataset = TrajectoryDataset(observations, actions, action_masks)
+    
+    # Split into train and validation
+    dataset_size = len(dataset)
+    val_size = int(dataset_size * validation_split)
+    train_size = dataset_size - val_size
+    
+    train_dataset, val_dataset = torch.utils.data.random_split(
+        dataset, [train_size, val_size]
+    )
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_batch,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_batch,
+    )
+    
+    # Create optimizer (only for policy network parameters)
+    # Get all parameters from policy network
+    policy_params = list(model.policy.parameters())
+    optimizer = torch.optim.Adam(policy_params, lr=learning_rate)
+    
+    # Setup TensorBoard if specified
+    from torch.utils.tensorboard import SummaryWriter
+    writer = None
+    if tensorboard_log:
+        os.makedirs(tensorboard_log, exist_ok=True)
+        writer = SummaryWriter(tensorboard_log)
+    
+    # Training history
+    history = {
+        "train_loss": [],
+        "val_loss": [],
+        "train_acc": [],
+        "val_acc": [],
+    }
+    
+    # Early stopping
+    best_val_loss = float('inf')
+    patience = 5
+    patience_counter = 0
+    best_model_state = None
+    
+    logger.info(f"Starting BC training:")
+    logger.info(f"  Train samples: {train_size}")
+    logger.info(f"  Validation samples: {val_size}")
+    logger.info(f"  Epochs: {n_epochs}")
+    logger.info(f"  Batch size: {batch_size}")
+    logger.info(f"  Learning rate: {learning_rate}")
+    logger.info(f"  Early stopping patience: {patience}")
+    
+    # Training loop
+    for epoch in range(n_epochs):
+        # Training phase
+        model.policy.train()
+        train_loss = 0.0
+        train_correct = 0
+        train_total = 0
+        train_batches_processed = 0
+        
+        for batch in train_loader:
+            obs_batch = batch["observation"]
+            action_batch = batch["action"].to(device)
+            action_mask_batch = batch["action_mask"]
+            
+            # Move observations to device
+            obs_batch_device = {
+                k: v.to(device) for k, v in obs_batch.items()
+            }
+            
+            # Move action masks to device if present
+            if action_mask_batch is not None:
+                action_mask_batch = action_mask_batch.to(device)
+            
+            # Get policy distribution
+            # Extract features
+            features = model.policy.extract_features(obs_batch_device)
+            
+            # Get latent policy
+            latent_pi = model.policy.mlp_extractor.forward_actor(features)
+            
+            # Get action logits
+            action_logits = model.policy.action_net(latent_pi)
+            
+            # Apply action mask if present and filter invalid expert actions
+            expert_action_valid = None
+            if action_mask_batch is not None:
+                # Mask invalid actions by setting logits to -inf
+                # action_mask_batch: (batch_size, action_space.n), True for valid actions
+                action_logits = action_logits.masked_fill(~action_mask_batch, float('-inf'))
+                
+                # Check if expert actions are valid
+                # Get validity for each expert action in the batch
+                batch_indices = torch.arange(action_batch.size(0), device=device)
+                expert_action_valid = action_mask_batch[batch_indices, action_batch]
+                
+                # Filter out invalid expert actions to avoid inf loss
+                if not expert_action_valid.all():
+                    # Some expert actions are invalid - filter them out
+                    valid_mask = expert_action_valid
+                    if valid_mask.any():
+                        # Keep only valid examples
+                        action_logits = action_logits[valid_mask]
+                        action_batch = action_batch[valid_mask]
+                        action_mask_batch = action_mask_batch[valid_mask]
+                    else:
+                        # All actions are invalid - skip this batch
+                        continue
+            
+            # Compute loss (cross-entropy)
+            # Only compute if we have valid examples
+            if action_batch.size(0) > 0:
+                loss = F.cross_entropy(action_logits, action_batch)
+            else:
+                continue
+            
+            # Compute accuracy
+            with torch.no_grad():
+                pred_actions = torch.argmax(action_logits, dim=1)
+                correct = (pred_actions == action_batch).sum().item()
+                train_correct += correct
+                train_total += action_batch.size(0)
+            
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(policy_params, max_norm=0.5)
+            
+            optimizer.step()
+            
+            train_loss += loss.item()
+            train_batches_processed += 1
+            
+            # Track number of skipped samples due to invalid expert actions
+            if expert_action_valid is not None and not expert_action_valid.all():
+                skipped = (~expert_action_valid).sum().item()
+                if skipped > 0 and verbose > 1:
+                    logger.debug(f"Skipped {skipped} samples with invalid expert actions in this batch")
+        
+        # Validation phase
+        model.policy.eval()
+        val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+        val_batches_processed = 0
+        
+        with torch.no_grad():
+            for batch in val_loader:
+                obs_batch = batch["observation"]
+                action_batch = batch["action"].to(device)
+                action_mask_batch = batch["action_mask"]
+                
+                # Move observations to device
+                obs_batch_device = {
+                    k: v.to(device) for k, v in obs_batch.items()
+                }
+                
+                # Move action masks to device if present
+                if action_mask_batch is not None:
+                    action_mask_batch = action_mask_batch.to(device)
+                
+                # Get policy distribution
+                features = model.policy.extract_features(obs_batch_device)
+                latent_pi = model.policy.mlp_extractor.forward_actor(features)
+                action_logits = model.policy.action_net(latent_pi)
+                
+                # Apply action mask if present
+                if action_mask_batch is not None:
+                    action_logits = action_logits.masked_fill(~action_mask_batch, float('-inf'))
+                    
+                    # Check if expert actions are valid
+                    batch_indices = torch.arange(action_batch.size(0), device=device)
+                    expert_action_valid = action_mask_batch[batch_indices, action_batch]
+                    
+                    # Filter out invalid expert actions
+                    if not expert_action_valid.all():
+                        valid_mask = expert_action_valid
+                        if valid_mask.any():
+                            action_logits = action_logits[valid_mask]
+                            action_batch = action_batch[valid_mask]
+                            action_mask_batch = action_mask_batch[valid_mask]
+                        else:
+                            continue
+                
+                # Compute loss (only if we have valid examples)
+                if action_batch.size(0) > 0:
+                    loss = F.cross_entropy(action_logits, action_batch)
+                    val_loss += loss.item()
+                    val_batches_processed += 1
+                    
+                    # Compute accuracy
+                    pred_actions = torch.argmax(action_logits, dim=1)
+                    correct = (pred_actions == action_batch).sum().item()
+                    val_correct += correct
+                    val_total += action_batch.size(0)
+        
+        # Calculate averages (use processed batches count to avoid division by zero)
+        avg_train_loss = train_loss / train_batches_processed if train_batches_processed > 0 else float('inf')
+        avg_val_loss = val_loss / val_batches_processed if val_batches_processed > 0 else float('inf')
+        train_acc = train_correct / train_total if train_total > 0 else 0.0
+        val_acc = val_correct / val_total if val_total > 0 else 0.0
+        
+        # Store history
+        history["train_loss"].append(avg_train_loss)
+        history["val_loss"].append(avg_val_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
+        
+        # Log progress
+        if verbose > 0:
+            logger.info(
+                f"Epoch {epoch + 1}/{n_epochs}: "
+                f"Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.4f}, "
+                f"Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.4f}"
+            )
+        
+        # TensorBoard logging
+        if writer is not None:
+            writer.add_scalar("BC/train_loss", avg_train_loss, epoch)
+            writer.add_scalar("BC/val_loss", avg_val_loss, epoch)
+            writer.add_scalar("BC/train_acc", train_acc, epoch)
+            writer.add_scalar("BC/val_acc", val_acc, epoch)
+        
+        # Early stopping check
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            patience_counter = 0
+            # Save best model state
+            best_model_state = {
+                'policy_state_dict': model.policy.state_dict(),
+                'epoch': epoch,
+                'val_loss': avg_val_loss,
+                'val_acc': val_acc,
+            }
+            if verbose > 0:
+                logger.info(f"  New best validation loss: {best_val_loss:.4f} (epoch {epoch + 1})")
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                if verbose > 0:
+                    logger.info(f"Early stopping triggered after {epoch + 1} epochs (patience: {patience})")
+                break
+    
+    # Restore best model if early stopping was used
+    if best_model_state is not None:
+        model.policy.load_state_dict(best_model_state['policy_state_dict'])
+        if verbose > 0:
+            logger.info(f"Restored best model from epoch {best_model_state['epoch'] + 1} "
+                       f"(val_loss: {best_model_state['val_loss']:.4f}, val_acc: {best_model_state['val_acc']:.4f})")
+    
+    if writer is not None:
+        writer.close()
+    
+    logger.info("BC training completed!")
+    
+    return history
+
+
 def train_behavioral_cloning(
     trajectories_dir: str,
     output_model_path: str,
@@ -194,6 +501,10 @@ def train_behavioral_cloning(
     num_envs: int = 1,
     total_timesteps: int = 100000,
     device: Optional[str] = None,
+    bc_epochs: int = 10,
+    bc_batch_size: int = 256,
+    bc_learning_rate: float = 3e-4,
+    validation_split: float = 0.2,
 ) -> MaskablePPO:
     """
     Train agent using behavioral cloning on collected trajectories.
@@ -260,33 +571,34 @@ def train_behavioral_cloning(
     
     logger.info("Model created, starting behavioral cloning training...")
     logger.info(f"  Training steps: {len(observations)}")
-    logger.info(f"  Total timesteps: {total_timesteps}")
+    logger.info(f"  BC epochs: {bc_epochs}")
+    logger.info(f"  BC batch size: {bc_batch_size}")
+    logger.info(f"  BC learning rate: {bc_learning_rate}")
     
-    # For behavioral cloning, we need to train the policy to match the expert actions
-    # This is a simplified version - in practice, you might want to use a dedicated BC library
-    # or implement a more sophisticated approach
-    
-    # Note: MaskablePPO doesn't have built-in BC support, so we'll use a workaround:
-    # We'll create a custom training loop that uses the policy's predict method
-    # and updates it to match expert actions
-    
-    # For now, we'll use standard PPO training with the trajectories as demonstrations
-    # A better approach would be to use a dedicated BC implementation or modify the loss function
-    
-    logger.warning("Behavioral cloning training is simplified - using standard PPO training")
-    logger.warning("For better results, consider using a dedicated BC library or custom loss function")
-    
-    # Train model (standard PPO training - trajectories will be used implicitly through environment)
-    # In a full BC implementation, you would:
-    # 1. Create a custom loss function that minimizes KL divergence between policy and expert
-    # 2. Train only the policy network (not value network)
-    # 3. Use the expert actions directly in the loss
-    
-    model.learn(
-        total_timesteps=total_timesteps,
-        tb_log_name="bc_training",
-        progress_bar=True,
+    # Train policy network using behavioral cloning
+    history = train_bc_policy(
+        model=model,
+        observations=observations,
+        actions=actions,
+        action_masks=action_masks,
+        n_epochs=bc_epochs,
+        batch_size=bc_batch_size,
+        learning_rate=bc_learning_rate,
+        validation_split=validation_split,
+        verbose=config.training.verbose,
+        tensorboard_log=os.path.join(os.path.abspath(config.training.log_dir), "bc_training"),
     )
+    
+    # Log final metrics
+    if history["train_loss"]:
+        final_train_loss = history["train_loss"][-1]
+        final_val_loss = history["val_loss"][-1]
+        final_train_acc = history["train_acc"][-1]
+        final_val_acc = history["val_acc"][-1]
+        
+        logger.info("Final BC training metrics:")
+        logger.info(f"  Train Loss: {final_train_loss:.4f}, Train Accuracy: {final_train_acc:.4f}")
+        logger.info(f"  Val Loss: {final_val_loss:.4f}, Val Accuracy: {final_val_acc:.4f}")
     
     # Save model
     model.save(output_model_path)
@@ -329,6 +641,30 @@ if __name__ == "__main__":
         default=None,
         help="Device to use (cuda/cpu, None = auto-detect)"
     )
+    parser.add_argument(
+        "--bc-epochs",
+        type=int,
+        default=10,
+        help="Number of BC training epochs"
+    )
+    parser.add_argument(
+        "--bc-batch-size",
+        type=int,
+        default=256,
+        help="Batch size for BC training"
+    )
+    parser.add_argument(
+        "--bc-learning-rate",
+        type=float,
+        default=3e-4,
+        help="Learning rate for BC training"
+    )
+    parser.add_argument(
+        "--validation-split",
+        type=float,
+        default=0.2,
+        help="Fraction of data to use for validation"
+    )
     
     args = parser.parse_args()
     
@@ -345,6 +681,10 @@ if __name__ == "__main__":
         max_trajectories=args.max_trajectories,
         total_timesteps=args.total_timesteps,
         device=args.device,
+        bc_epochs=args.bc_epochs,
+        bc_batch_size=args.bc_batch_size,
+        bc_learning_rate=args.bc_learning_rate,
+        validation_split=args.validation_split,
     )
     
     logger.info("Training completed!")

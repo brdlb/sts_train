@@ -74,6 +74,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
         rule_based_pool: Optional[Any] = None,  # RuleBasedOpponentPool type
         training_mode: str = "selfplay",  # "selfplay", "botplay", "mixed"
         mixed_mode_ratio: float = 0.5,  # Ratio of botplay in mixed mode
+        collect_trajectories: bool = False,  # Enable trajectory collection for imitation learning
     ):
         """
         Initialize vectorized environment.
@@ -96,6 +97,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
             rule_based_pool: Rule-based opponent pool for botplay mode
             training_mode: Training mode ("selfplay", "botplay", "mixed")
             mixed_mode_ratio: Ratio of botplay in mixed mode (0.0 to 1.0)
+            collect_trajectories: Enable trajectory collection for imitation learning
         """
         self.num_envs = num_envs
         self.random_num_players = random_num_players
@@ -116,6 +118,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
         self.rule_based_pool = rule_based_pool
         self.training_mode = training_mode
         self.mixed_mode_ratio = mixed_mode_ratio
+        self.collect_trajectories = collect_trajectories
 
         # Use default reward config if not provided
         if reward_config is None and DEFAULT_CONFIG is not None:
@@ -135,6 +138,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
                 max_players=max_players,
                 max_history_length=max_history_length,  # Use provided max_history_length
                 reward_config=reward_config,
+                collect_trajectories=collect_trajectories,
                 # debug_moves is not a parameter of PerudoEnv, it's handled by VecEnv
             )
             self.envs.append(env)

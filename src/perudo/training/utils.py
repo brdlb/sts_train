@@ -79,58 +79,29 @@ def find_latest_model(model_dir: str) -> Optional[str]:
     """
     Find the latest saved model in the model directory.
     
-    Looks for models with pattern:
-    - perudo_model_<steps>_steps.zip (checkpoint models)
-    - perudo_model_final.zip (final model, treated as highest priority)
+    Looks for any .zip files and returns the most recent one by modification time.
     
     Args:
         model_dir: Directory to search for models
     
     Returns:
-        Path to the latest model, or None if no models found
+        Path to the latest model (by modification time), or None if no models found
     """
     if not os.path.exists(model_dir):
         return None
     
-    # Find all checkpoint models (perudo_model_<steps>_steps.zip)
-    checkpoint_pattern = os.path.join(model_dir, "perudo_model_*_steps.zip")
-    checkpoint_files = glob.glob(checkpoint_pattern)
+    # Find all .zip files in the directory
+    zip_pattern = os.path.join(model_dir, "*.zip")
+    zip_files = glob.glob(zip_pattern)
     
-    # Find final model
-    final_model_path = os.path.join(model_dir, "perudo_model_final.zip")
-    final_model_exists = os.path.exists(final_model_path)
+    if not zip_files:
+        return None
     
-    latest_model = None
-    latest_steps = -1
+    # Sort by modification time (most recent first)
+    zip_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
     
-    # Extract steps from checkpoint files
-    pattern = re.compile(r"perudo_model_(\d+)_steps\.zip")
-    for file_path in checkpoint_files:
-        match = pattern.search(os.path.basename(file_path))
-        if match:
-            steps = int(match.group(1))
-            if steps > latest_steps:
-                latest_steps = steps
-                latest_model = file_path
-    
-    # If final model exists, prefer it over checkpoints
-    if final_model_exists:
-        # But if we have checkpoints with more steps, use the checkpoint
-        # (final model might be from an earlier run)
-        if latest_steps > 0:
-            # Compare modification times
-            final_mtime = os.path.getmtime(final_model_path)
-            latest_mtime = os.path.getmtime(latest_model) if latest_model else 0
-            
-            # Use the more recent file
-            if final_mtime > latest_mtime:
-                return final_model_path
-            else:
-                return latest_model
-        else:
-            return final_model_path
-    
-    return latest_model
+    # Return the most recent file
+    return zip_files[0]
 
 
 def restore_model_from_opponent_pool(model_dir: str, pool_dir: str) -> Optional[str]:
