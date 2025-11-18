@@ -5,6 +5,7 @@ import BidControls from './BidControls';
 import { GameHistory } from './GameHistory';
 import Modal from './Modal';
 import DiceRevealModal from './DiceRevealModal';
+import GameOverModal from './GameOverModal';
 import { encode_bid } from '../utils/actions';
 import { PLAYER_NAMES } from '../constants';
 
@@ -402,15 +403,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         <p className="text-gray-400 text-lg">Last player with dice wins!</p>
       </div>
 
-      {gameState.game_over && (
-        <div className={`w-full max-w-7xl mb-6 p-4 rounded-lg ${
-          gameState.winner === 0 ? 'bg-green-600' : 'bg-red-600'
-        } text-white text-center text-xl font-bold`}>
-          {gameState.winner === 0
-            ? '🎉 You Won! 🎉'
-            : `Game Over! ${gameState.winner !== null ? (PLAYER_NAMES[gameState.winner] || `Player ${gameState.winner}`) : 'Unknown'} won.`}
-        </div>
-      )}
 
       <div className="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-2 lg:gap-8 lg:items-end z-10">
         {/* Player List Column */}
@@ -521,6 +513,12 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         }}
         actionEntry={revealModalEntry}
         isSpecialRound={gameState?.palifico_active?.some(p => p) || false}
+      />
+
+      <GameOverModal
+        isOpen={gameState?.game_over || false}
+        onClose={onGameEnd}
+        gameState={gameState}
       />
     </div>
   );
