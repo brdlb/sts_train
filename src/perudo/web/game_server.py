@@ -791,6 +791,15 @@ class GameSession:
             int(count) for count in game_state.player_dice_count
         ]
         
+        # Add all player dice values for reveal (challenge/believe only)
+        # This allows frontend to show all dice during reveal phase
+        if action_type in ("challenge", "believe"):
+            all_player_dice = []
+            for player_id in range(game_state.num_players):
+                player_dice = game_state.get_player_dice(player_id)
+                all_player_dice.append([int(die) for die in player_dice])
+            consequences["all_player_dice"] = all_player_dice
+        
         return consequences
 
     def _save_state_to_db(self):

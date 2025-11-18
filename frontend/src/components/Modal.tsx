@@ -5,11 +5,21 @@ interface ModalProps {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
+  maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl';
 }
 
-const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children }) => {
+const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children, maxWidth = 'lg' }) => {
   const modalRef = useRef<HTMLDivElement>(null);
   const firstFocusableRef = useRef<HTMLButtonElement>(null);
+  
+  const maxWidthClasses = {
+    sm: 'max-w-sm',
+    md: 'max-w-md',
+    lg: 'max-w-lg',
+    xl: 'max-w-xl',
+    '2xl': 'max-w-2xl',
+    '4xl': 'max-w-4xl',
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -71,7 +81,7 @@ const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children }) => {
     >
       <div
         ref={modalRef}
-        className="bg-gray-800 rounded-lg shadow-xl p-8 max-w-lg w-full m-4"
+        className={`bg-gray-800 rounded-lg shadow-xl p-8 ${maxWidthClasses[maxWidth]} w-full m-4`}
         onClick={(e) => e.stopPropagation()}
       >
         <h2 id="modal-title" className="text-3xl font-bold text-white mb-4">

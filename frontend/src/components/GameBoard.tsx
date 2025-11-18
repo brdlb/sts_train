@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { gamesApi, GameState } from '../services/api';
+import { gamesApi, GameState, ExtendedActionHistoryEntry } from '../services/api';
 import Player from './Player';
 import BidControls from './BidControls';
 import { GameHistory } from './GameHistory';
 import Modal from './Modal';
+import DiceRevealModal from './DiceRevealModal';
 import { encode_bid } from '../utils/actions';
 import { PLAYER_NAMES } from '../constants';
 
@@ -19,6 +20,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   const [processing, setProcessing] = useState(false);
   const [gamePhase, setGamePhase] = useState<'bidding' | 'reveal' | 'round_over' | 'game_over'>('bidding');
   const [modalContent, setModalContent] = useState<{ title: string; body: React.ReactNode } | null>(null);
+  const [revealModalEntry, setRevealModalEntry] = useState<ExtendedActionHistoryEntry | null>(null);
   const [lastActionHistoryLength, setLastActionHistoryLength] = useState(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const isMountedRef = useRef(true);
@@ -155,64 +157,15 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
       // Check if any new entry is a challenge or believe with consequences
       for (const entry of newEntries) {
         if ((entry.action_type === 'challenge' || entry.action_type === 'believe') && entry.consequences) {
-          const consequences = entry.consequences;
-          const challengerName = PLAYER_NAMES[entry.player_id] || `Player ${entry.player_id}`;
-          const bidderName = consequences.bidder_id !== null && consequences.bidder_id !== undefined
-            ? (PLAYER_NAMES[consequences.bidder_id] || `Player ${consequences.bidder_id}`)
-            : 'another player';
+          // Show dice reveal modal instead of simple text modal
+          setGamePhase('round_over');
+          setRevealModalEntry(entry);
           
-          let title = '';
-          let body = '';
-          
-          if (entry.action_type === 'challenge') {
-            title = `${challengerName} challenged the bid!`;
-            const bidInfo = consequences.bid_quantity && consequences.bid_value
-              ? `${consequences.bid_quantity}x${consequences.bid_value}`
-              : 'the bid';
-            
-            if (consequences.challenge_success === true) {
-              body = `The bid ${bidInfo} from ${bidderName} was incorrect! ${bidderName} lost a die.`;
-            } else if (consequences.challenge_success === false) {
-              body = `The bid ${bidInfo} from ${bidderName} was correct! ${challengerName} lost a die.`;
-            } else {
-              body = `${challengerName} challenged ${bidInfo} from ${bidderName}.`;
-            }
-            
-            if (consequences.actual_count !== null) {
-              body += ` Actual count: ${consequences.actual_count}.`;
-            }
-          } else if (entry.action_type === 'believe') {
-            title = `${challengerName} believed the bid!`;
-            const bidInfo = consequences.bid_quantity && consequences.bid_value
-              ? `${consequences.bid_quantity}x${consequences.bid_value}`
-              : 'the bid';
-            
-            if (consequences.believe_success === true) {
-              body = `The bid ${bidInfo} from ${bidderName} was exact! ${challengerName} gained an advantage.`;
-            } else if (consequences.believe_success === false) {
-              body = `The bid ${bidInfo} from ${bidderName} was not exact! ${challengerName} lost a die.`;
-            } else {
-              body = `${challengerName} believed ${bidInfo} from ${bidderName}.`;
-            }
-            
-            if (consequences.actual_count !== null) {
-              body += ` Actual count: ${consequences.actual_count}.`;
-            }
-          }
-          
-          if (title && body) {
-            setGamePhase('round_over');
-            setModalContent({ 
-              title, 
-              body: <p dangerouslySetInnerHTML={{ __html: body.replace(/\n/g, '<br/>') }} /> 
-            });
-            
-            // Auto-close modal after 3 seconds and continue
-            setTimeout(() => {
-              setModalContent(null);
-              setGamePhase('bidding');
-            }, 3000);
-          }
+          // Auto-close modal after 5 seconds and continue
+          setTimeout(() => {
+            setRevealModalEntry(null);
+            setGamePhase('bidding');
+          }, 5000);
         }
       }
       
@@ -502,6 +455,16 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
       >
         {modalContent?.body}
       </Modal>
+
+      <DiceRevealModal
+        isOpen={!!revealModalEntry}
+        onClose={() => {
+          setRevealModalEntry(null);
+          setGamePhase('bidding');
+        }}
+        actionEntry={revealModalEntry}
+        isSpecialRound={gameState?.palifico_active?.some(p => p) || false}
+      />
     </div>
   );
 };

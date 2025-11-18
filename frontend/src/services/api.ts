@@ -31,6 +31,7 @@ export interface ActionConsequences {
   bidder_id: number | null;
   error_msg: string | null;
   player_dice_count_after: number[];
+  all_player_dice?: number[][]; // All player dice values during reveal (challenge/believe only)
 }
 
 export interface ExtendedActionHistoryEntry {
