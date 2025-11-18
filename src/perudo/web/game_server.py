@@ -137,6 +137,7 @@ class GameSession:
             min_players=game_config.min_players,  # Must match training config
             max_players=game_config.max_players,  # Must match training config
             reward_config=DEFAULT_CONFIG.reward,
+            auto_advance_round=False,  # Web version requires manual confirmation before advancing to next round
         )
 
         # Reset environment
@@ -212,6 +213,9 @@ class GameSession:
         # Extended action history with consequences
         # Each entry contains: player_id, action_type, action_data, consequences
         self.extended_action_history: List[Dict[str, Any]] = []
+
+        # Flag to track if we're awaiting user confirmation to continue to next round after reveal
+        self.awaiting_reveal_confirmation = False
 
         # Save initial state to DB
         self._save_state_to_db()
@@ -344,6 +348,7 @@ class GameSession:
             "last_bid_player_id": game_state.last_bid_player_id if game_state.last_bid_player_id is not None else None,
             "player_dice": player_dice,  # Only human player's dice (converted to lists)
             "public_info": self._serialize_public_info(public_info),
+            "awaiting_reveal_confirmation": bool(self.awaiting_reveal_confirmation),
         }
     
     def _serialize_public_info(self, public_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -484,6 +489,10 @@ class GameSession:
         # Sync state from game_state after action
         # This ensures we have the correct state after challenge/believe when rounds restart
         self._sync_state(terminated, truncated)
+        
+        # Check if round advance is needed (for challenge/believe with auto_advance_round=False)
+        if info.get("needs_round_advance") and not self.game_over:
+            self.awaiting_reveal_confirmation = True
         
         # Save state to DB
         self._save_state_to_db()
@@ -812,6 +821,31 @@ class GameSession:
             consequences["all_player_dice"] = all_player_dice
         
         return consequences
+
+    def continue_to_next_round(self) -> None:
+        """
+        Continue to the next round after reveal confirmation.
+        
+        This method should be called when the user has viewed the reveal modal
+        and is ready to proceed to the next round.
+        
+        Raises:
+            RuntimeError: If not awaiting reveal confirmation
+        """
+        if not self.awaiting_reveal_confirmation:
+            raise RuntimeError("Not awaiting reveal confirmation")
+        
+        # Advance to next round in environment
+        self.env.advance_to_next_round()
+        
+        # Clear the awaiting flag
+        self.awaiting_reveal_confirmation = False
+        
+        # Sync state after round advance
+        self._sync_state()
+        
+        # Save state to DB
+        self._save_state_to_db()
 
     def _save_state_to_db(self):
         """Save current game state to database."""

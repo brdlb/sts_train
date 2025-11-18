@@ -65,6 +65,7 @@ export interface GameState {
     dice_values?: number[];
   };
   public_info: any;
+  awaiting_reveal_confirmation?: boolean; // Flag indicating if waiting for user to continue after reveal
 }
 
 export interface CreateGameRequest {
@@ -194,6 +195,13 @@ export const gamesApi = {
 
   list: async (filters?: { finished?: boolean; limit?: number }): Promise<any[]> => {
     const response = await api.get('/games', { params: filters });
+    return response.data;
+  },
+
+  continueRound: async (gameId: string): Promise<{ success: boolean; state: GameState }> => {
+    const response = await api.post<{ success: boolean; state: GameState }>(
+      `/games/${gameId}/continue-round`
+    );
     return response.data;
   },
 

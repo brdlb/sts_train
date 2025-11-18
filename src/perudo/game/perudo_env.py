@@ -38,6 +38,7 @@ class PerudoEnv(gym.Env):
         max_players: int = 8,
         reward_config: Optional[RewardConfig] = None,
         collect_trajectories: bool = False,  # Enable trajectory collection for imitation learning
+        auto_advance_round: bool = True,  # If False, round transition requires manual call to advance_to_next_round()
     ):
         """
         Initialize Perudo environment.
@@ -55,11 +56,18 @@ class PerudoEnv(gym.Env):
             max_players: Maximum number of players (used when random_num_players=True)
             reward_config: Reward configuration (uses DEFAULT_CONFIG.reward if not provided)
             collect_trajectories: Enable trajectory collection for imitation learning
+            auto_advance_round: If True, automatically advance to next round after challenge/believe.
+                                If False, requires manual call to advance_to_next_round()
         """
         super().__init__()
 
         # Store reward configuration
         self.reward_config = reward_config if reward_config is not None else DEFAULT_CONFIG.reward
+        
+        # Store auto_advance_round setting
+        self.auto_advance_round = auto_advance_round
+        self._pending_round_advance = False  # Track if round advance is pending
+        self._round_advance_data = None  # Store data needed for round advance
 
         # Store parameters for random player selection
         self.random_num_players = random_num_players
@@ -236,6 +244,9 @@ class PerudoEnv(gym.Env):
         Returns:
             Tuple (observation, reward, terminated, truncated, info)
         """
+        # Initialize info dictionary early so it can be modified during action processing
+        info: Dict[str, Any] = {}
+        
         # Check that game is not over
         if self.game_state.game_over:
             observation = self._get_observation(self.active_player_id)
@@ -244,7 +255,7 @@ class PerudoEnv(gym.Env):
             # CRITICAL: When used in VecEnv, episode info should be set by VecEnv wrapper, not here
             # This prevents incorrect rewards from being recorded when game ends on opponent's turn
             # VecEnv wrapper (perudo_vec_env.py) will recalculate and set correct reward for learning agent
-            info = {
+            info.update({
                 "game_over": True,
                 "winner": self.game_state.winner,
                 # Do NOT set episode info here - let VecEnv wrapper set it with correct learning agent reward
@@ -256,7 +267,7 @@ class PerudoEnv(gym.Env):
                 "_episode_invalid_action_count": self.episode_invalid_action_count,
                 "_episode_reward_raw": self.episode_reward,  # Raw reward for debugging
                 "_episode_length_raw": self.episode_length,  # Raw length for debugging
-            }
+            })
             return observation, 0.0, True, False, info
 
         # CRITICAL: Check that active player has dice - players with 0 dice cannot make moves
@@ -452,15 +463,26 @@ class PerudoEnv(gym.Env):
                         self.game_state.next_player()
 
                     # Roll dice again - round ends
-                    # Reset special round at end of round
-                    self.game_state.special_round_active = False
-                    self.game_state.special_round_declared_by = None
-                    # Increment round number for new round
-                    self.game_state.round_number += 1
-                    self.game_state.roll_dice()
-                    # Reset round tracking after dice roll
-                    self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
-                    self.agent_bid_this_round = False
+                    # If auto_advance_round is False, delay the round transition
+                    if self.auto_advance_round:
+                        # Reset special round at end of round
+                        self.game_state.special_round_active = False
+                        self.game_state.special_round_declared_by = None
+                        # Increment round number for new round
+                        self.game_state.round_number += 1
+                        self.game_state.roll_dice()
+                        # Reset round tracking after dice roll
+                        self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
+                        self.agent_bid_this_round = False
+                    else:
+                        # Store data for delayed round advance
+                        self._pending_round_advance = True
+                        self._round_advance_data = {
+                            "loser_id": loser_id,
+                            "action_type": "challenge"
+                        }
+                        # Set flag in info to indicate round advance is needed
+                        info["needs_round_advance"] = True
                 else:
                     # Game ended, clear bid state
                     self.game_state.current_bid = None
@@ -614,15 +636,28 @@ class PerudoEnv(gym.Env):
                         self.game_state.next_player()
 
                     # Roll dice again - round ends
-                    # Reset special round at end of round
-                    self.game_state.special_round_active = False
-                    self.game_state.special_round_declared_by = None
-                    # Increment round number for new round
-                    self.game_state.round_number += 1
-                    self.game_state.roll_dice()
-                    # Reset round tracking after dice roll
-                    self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
-                    self.agent_bid_this_round = False
+                    # If auto_advance_round is False, delay the round transition
+                    if self.auto_advance_round:
+                        # Reset special round at end of round
+                        self.game_state.special_round_active = False
+                        self.game_state.special_round_declared_by = None
+                        # Increment round number for new round
+                        self.game_state.round_number += 1
+                        self.game_state.roll_dice()
+                        # Reset round tracking after dice roll
+                        self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
+                        self.agent_bid_this_round = False
+                    else:
+                        # Store data for delayed round advance
+                        self._pending_round_advance = True
+                        self._round_advance_data = {
+                            "player_who_changed_dice": player_who_changed_dice,
+                            "next_round_starter": next_round_starter,
+                            "loser_id": loser_id,
+                            "action_type": "believe"
+                        }
+                        # Set flag in info to indicate round advance is needed
+                        info["needs_round_advance"] = True
                 else:
                     # Game ended, clear bid state
                     self.game_state.current_bid = None
@@ -750,7 +785,8 @@ class PerudoEnv(gym.Env):
             deferred_reward_for_info = self.agent_deferred_reward
             self.agent_deferred_reward = 0.0  # Reset after storing
         
-        info = {
+        # Update info dictionary with final values (may have been partially populated earlier)
+        info.update({
             "player_id": self.active_player_id,
             "game_over": terminated,
             "winner": self.game_state.winner,
@@ -759,7 +795,7 @@ class PerudoEnv(gym.Env):
             "retry": retry_needed,  # Flag indicating if action needs to be retried
             "invalid_action_attempts": self.invalid_action_attempts,  # Number of invalid attempts
             "deferred_reward": deferred_reward_for_info,  # Deferred reward for RewardManager
-        }
+        })
 
         # If episode ended, save statistics for monitoring
         # CRITICAL: When used in VecEnv, episode info should be set by VecEnv wrapper, not here
@@ -941,3 +977,37 @@ class PerudoEnv(gym.Env):
                 reward += self.reward_config.successful_bluff_reward
 
         return reward
+
+    def advance_to_next_round(self) -> None:
+        """
+        Manually advance to the next round after challenge/believe.
+        
+        This method should be called when auto_advance_round=False and
+        a challenge/believe action requires round transition.
+        
+        Raises:
+            RuntimeError: If no round advance is pending
+        """
+        if not self._pending_round_advance:
+            raise RuntimeError("No pending round advance. This method should only be called after challenge/believe with auto_advance_round=False.")
+        
+        if self._round_advance_data is None:
+            raise RuntimeError("Round advance data is missing.")
+        
+        # Reset special round at end of round
+        self.game_state.special_round_active = False
+        self.game_state.special_round_declared_by = None
+        
+        # Increment round number for new round
+        self.game_state.round_number += 1
+        
+        # Roll dice for new round
+        self.game_state.roll_dice()
+        
+        # Reset round tracking after dice roll
+        self.agent_dice_at_round_start = self.game_state.player_dice_count[0]
+        self.agent_bid_this_round = False
+        
+        # Clear pending state
+        self._pending_round_advance = False
+        self._round_advance_data = None

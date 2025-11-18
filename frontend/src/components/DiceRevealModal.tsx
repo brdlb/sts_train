@@ -17,7 +17,7 @@ const DiceRevealModal: React.FC<DiceRevealModalProps> = ({
   actionEntry,
   isSpecialRound = false,
 }) => {
-  if (!isOpen || !actionEntry || !actionEntry.consequences) {
+  if (!isOpen || !actionEntry || !actionEntry.consequences || !actionEntry.consequences.all_player_dice) {
     return null;
   }
 

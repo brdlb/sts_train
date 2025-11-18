@@ -177,21 +177,23 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     if (currentLength > lastActionHistoryLength) {
       const newEntries = gameState.extended_action_history.slice(lastActionHistoryLength);
       
-      // Check if any new entry is a challenge or believe with consequences
+      // Find the LAST challenge/believe entry with all_player_dice (most recent)
+      let lastRevealEntry: ExtendedActionHistoryEntry | null = null;
       for (const entry of newEntries) {
-        if ((entry.action_type === 'challenge' || entry.action_type === 'believe') && entry.consequences) {
-          // Show dice reveal modal instead of simple text modal
-          setGamePhase('round_over');
-          setRevealModalEntry(entry);
-          
-          // Auto-close modal after 5 seconds and continue
-          setTimeout(() => {
-            setRevealModalEntry(null);
-            setGamePhase('bidding');
-          }, 5000);
+        if ((entry.action_type === 'challenge' || entry.action_type === 'believe') && 
+            entry.consequences && 
+            entry.consequences.all_player_dice) {
+          lastRevealEntry = entry;
         }
       }
       
+      // Show modal only for the last entry with all_player_dice
+      if (lastRevealEntry) {
+        setGamePhase('round_over');
+        setRevealModalEntry(lastRevealEntry);
+      }
+      
+      // Update lastActionHistoryLength at the end
       setLastActionHistoryLength(currentLength);
     }
   }, [gameState?.extended_action_history, lastActionHistoryLength]);
@@ -257,9 +259,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
       const result = await gamesApi.makeAction(gameId, 0); // 0 = challenge
       setGameState(result.state);
       
-      if (result.state.extended_action_history) {
-        setLastActionHistoryLength(result.state.extended_action_history.length);
-      }
+      // Don't update lastActionHistoryLength here - let useEffect handle it
 
       if (result.game_over) {
         setGamePhase('game_over');
@@ -285,9 +285,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
       const result = await gamesApi.makeAction(gameId, 1); // 1 = believe
       setGameState(result.state);
       
-      if (result.state.extended_action_history) {
-        setLastActionHistoryLength(result.state.extended_action_history.length);
-      }
+      // Don't update lastActionHistoryLength here - let useEffect handle it
 
       if (result.game_over) {
         setGamePhase('game_over');
@@ -497,9 +495,29 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
       <DiceRevealModal
         isOpen={!!revealModalEntry}
-        onClose={() => {
+        onClose={async () => {
           setRevealModalEntry(null);
-          setGamePhase('bidding');
+          
+          // If game is awaiting reveal confirmation, continue to next round
+          if (gameState?.awaiting_reveal_confirmation) {
+            try {
+              const result = await gamesApi.continueRound(gameId);
+              setGameState(result.state);
+              setGamePhase('bidding');
+              
+              // If it's AI's turn, subscribe to AI turns
+              if (result.state.current_player !== 0 && !result.state.game_over) {
+                subscribeToAiTurns();
+              }
+            } catch (err) {
+              console.error('Failed to continue round:', err);
+              setError('Failed to continue to next round');
+              // Fallback: just update phase
+              setGamePhase('bidding');
+            }
+          } else {
+            setGamePhase('bidding');
+          }
         }}
         actionEntry={revealModalEntry}
         isSpecialRound={gameState?.palifico_active?.some(p => p) || false}

@@ -122,6 +122,46 @@ async def make_action(game_id: str, request: ActionRequest):
     return result
 
 
+@router.post("/{game_id}/continue-round")
+async def continue_round(game_id: str):
+    """
+    Continue to next round after reveal (challenge/believe).
+    
+    This endpoint is called after the user has viewed the reveal modal
+    and is ready to proceed to the next round.
+    
+    Args:
+        game_id: Game session ID
+        
+    Returns:
+        Updated game state
+    """
+    if game_server is None:
+        raise HTTPException(status_code=500, detail="Game server not initialized")
+    
+    session = game_server.get_game(game_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    if not session.awaiting_reveal_confirmation:
+        raise HTTPException(
+            status_code=400, 
+            detail="Not awaiting reveal confirmation"
+        )
+    
+    try:
+        # Continue to next round
+        session.continue_to_next_round()
+        
+        # Return updated state
+        return {
+            "success": True,
+            "state": session.get_public_state()
+        }
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/{game_id}/ai-turns")
 async def stream_ai_turns(game_id: str):
     """
