@@ -65,7 +65,26 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
       <div className="flex-grow overflow-y-auto pr-2">
         {extendedActionHistory && extendedActionHistory.length > 0 ? (
           <div className="space-y-2">
-            {extendedActionHistory.filter(entry => entry && entry.consequences).slice().reverse().map((entry, index) => {
+            {(() => {
+              // Filter out invalid actions and deduplicate entries
+              const seen = new Set<string>();
+              const filtered = extendedActionHistory
+                .filter(entry => {
+                  if (!entry || !entry.consequences || entry.consequences.action_valid === false) {
+                    return false;
+                  }
+                  // Create unique key for deduplication
+                  const key = `${entry.player_id}-${entry.action_type}-${entry.turn_number}-${entry.action_data?.quantity || ''}-${entry.action_data?.value || ''}`;
+                  if (seen.has(key)) {
+                    return false;
+                  }
+                  seen.add(key);
+                  return true;
+                })
+                .slice()
+                .reverse();
+              
+              return filtered.map((entry, index) => {
               // Validate entry
               if (!entry || !entry.consequences) {
                 return null;
@@ -113,7 +132,8 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                   )}
                 </div>
               );
-            })}
+            });
+            })()}
           </div>
         ) : (
           // Fallback to simple bid history if extended history is not available

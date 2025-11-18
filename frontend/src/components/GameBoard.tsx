@@ -95,12 +95,23 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     eventSourceRef.current = eventSource;
   }, [gameId, onGameEnd]);
 
-  const loadGameState = useCallback(async () => {
+  const loadGameState = useCallback(async (skipSSECheck: boolean = false) => {
     if (!isMountedRef.current) return;
+    
+    // Do not load state if SSE is active to avoid race conditions and duplicate updates
+    // Skip this check for initial load or when explicitly requested
+    if (!skipSSECheck && (eventSourceRef.current || processing)) {
+      return;
+    }
     
     try {
       const state = await gamesApi.getState(gameId);
       if (!isMountedRef.current) return;
+      
+      // Double-check that SSE didn't start while we were fetching (only if not initial load)
+      if (!skipSSECheck && (eventSourceRef.current || processing)) {
+        return;
+      }
       
       setGameState(state);
       setLoading(false);
@@ -113,6 +124,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
       if (state.game_over) {
         setGamePhase('game_over');
         onGameEnd();
+      } else if (state.current_player === 0) {
+        // If it's human's turn, ensure processing is false to enable controls
+        setProcessing(false);
       } else if (state.current_player !== 0 && !eventSourceRef.current) {
         // If it's AI's turn and we're not already subscribed, subscribe to AI turns
         subscribeToAiTurns();
@@ -123,22 +137,25 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
       console.error(err);
       setLoading(false);
     }
-  }, [gameId, onGameEnd, subscribeToAiTurns]);
+  }, [gameId, onGameEnd, subscribeToAiTurns, processing]);
 
   useEffect(() => {
     if (!isMountedRef.current) return;
     
-    loadGameState();
+    // Initial load - skip SSE check for first load
+    loadGameState(true);
     // Poll for game state updates (only when not processing AI turns and not human's turn)
+    // IMPORTANT: Do not poll when processing is true or SSE is active to avoid race conditions
     const interval = setInterval(() => {
+      // Check conditions at the time of execution, not when interval was created
       if (
         isMountedRef.current && 
         !gameState?.game_over && 
         !processing && 
-        !eventSourceRef.current &&
-        gameState?.current_player !== 0  // Don't poll during human's turn
+        !eventSourceRef.current && 
+        gameState?.current_player !== 0
       ) {
-        loadGameState();
+        loadGameState(false);
       }
     }, 2000); // Poll every 2 seconds
 
