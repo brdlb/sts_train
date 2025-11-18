@@ -289,10 +289,20 @@ class GameSession:
         actual_player_dice = self.env.game_state.get_player_dice(0)
         player_dice["dice_values"] = list(actual_player_dice)
         
-        # Convert bid_history tuples to lists for JSON serialization
-        bid_history_serializable = [
-            self._serialize_value(bid) for bid in game_state.bid_history
-        ]
+        # Convert bid_history to frontend format [player_id, quantity, value]
+        # Use extended_action_history to get player_id for each bid
+        from ..utils.helpers import decode_bid
+        
+        bid_history_frontend = []
+        for entry in self.extended_action_history:
+            if entry["action_type"] == "bid" and entry["action_data"].get("quantity") is not None:
+                bid_history_frontend.append([
+                    entry["player_id"],
+                    entry["action_data"]["quantity"],
+                    entry["action_data"]["value"]
+                ])
+        
+        bid_history_serializable = bid_history_frontend
         
         # Convert current_bid tuple to list if it exists
         current_bid_serializable = self._serialize_value(game_state.current_bid)
@@ -331,6 +341,7 @@ class GameSession:
             "extended_action_history": extended_history_serializable,
             "palifico_active": self._serialize_value(game_state.palifico_active),
             "believe_called": bool(game_state.believe_called),
+            "last_bid_player_id": game_state.last_bid_player_id if game_state.last_bid_player_id is not None else None,
             "player_dice": player_dice,  # Only human player's dice (converted to lists)
             "public_info": self._serialize_public_info(public_info),
         }

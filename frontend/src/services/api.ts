@@ -58,6 +58,7 @@ export interface GameState {
   extended_action_history?: ExtendedActionHistoryEntry[];
   palifico_active: boolean[];
   believe_called: boolean;
+  last_bid_player_id?: number | null;
   player_dice: {
     bid_history: number[][];
     static_info: number[];

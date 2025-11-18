@@ -335,19 +335,35 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   // Calculate total dice in play
   const totalDiceInPlay = gameState.player_dice_count.reduce((sum, count) => sum + count, 0);
   
-  // Find last bidder from bid history
-  // Only show indicator if current_bid matches the last bid in history
-  const lastBidderId = gameState.bid_history.length > 0 && gameState.current_bid
-    ? (() => {
-        const lastBidInHistory = gameState.bid_history[gameState.bid_history.length - 1];
-        // Verify that current_bid matches the last bid in history
-        if (lastBidInHistory[1] === gameState.current_bid[0] && 
-            lastBidInHistory[2] === gameState.current_bid[1]) {
-          return lastBidInHistory[0];
-        }
-        return null;
-      })()
-    : null;
+  // Find last bidder from extended_action_history or bid_history
+  let lastBidderId: number | null = null;
+
+  // First, try to use last_bid_player_id if available (most reliable)
+  if (gameState.current_bid && gameState.last_bid_player_id !== undefined && gameState.last_bid_player_id !== null) {
+    lastBidderId = gameState.last_bid_player_id;
+  }
+  // Try to find from extended_action_history
+  else if (gameState.current_bid && gameState.extended_action_history) {
+    for (let i = gameState.extended_action_history.length - 1; i >= 0; i--) {
+      const entry = gameState.extended_action_history[i];
+      if (entry.action_type === 'bid' && 
+          entry.action_data?.quantity === gameState.current_bid[0] &&
+          entry.action_data?.value === gameState.current_bid[1]) {
+        lastBidderId = entry.player_id;
+        break;
+      }
+    }
+  }
+
+  // Fallback to bid_history if extended_action_history didn't work
+  if (lastBidderId === null && gameState.bid_history.length > 0 && gameState.current_bid) {
+    const lastBidInHistory = gameState.bid_history[gameState.bid_history.length - 1];
+    if (lastBidInHistory && lastBidInHistory.length >= 3 &&
+        lastBidInHistory[1] === gameState.current_bid[0] && 
+        lastBidInHistory[2] === gameState.current_bid[1]) {
+      lastBidderId = lastBidInHistory[0];
+    }
+  }
 
   // Arrange players: human player at bottom
   const displayPlayers = [];
