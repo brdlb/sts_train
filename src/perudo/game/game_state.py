@@ -4,6 +4,7 @@ Game state class for Perudo game.
 
 from typing import List, Optional, Tuple
 import numpy as np
+from ..utils.helpers import encode_bid
 
 
 class GameState:
@@ -33,7 +34,10 @@ class GameState:
 
         # Public information
         self.current_bid: Optional[Tuple[int, int]] = None  # (quantity, value)
-        self.bid_history: List[Tuple[int, int, int]] = []  # (player, quantity, value)
+        self.bid_history: List[Tuple[int, int]] = []  # (action_type, encoded_bid)
+        # action_type: 0=bid, 1=challenge, 2=believe
+        # encoded_bid: encoded quantity and value via encode_bid(quantity, value)
+        self.last_bid_player_id: Optional[int] = None  # Track last player who made a bid
         self.current_player: int = 0
 
         # Number of dice for each player (public information)
@@ -49,16 +53,33 @@ class GameState:
         # Game status
         self.game_over: bool = False
         self.winner: Optional[int] = None
+        
+        # Round tracking
+        self.round_number: int = 0
 
         # Initialize initial state
         self.reset()
 
-    def reset(self) -> None:
-        """Reset game to initial state."""
+    def reset(self, seed: Optional[int] = None) -> None:
+        """
+        Reset game to initial state.
+        
+        Args:
+            seed: Optional random seed for reproducible starting player selection.
+                  If None, uses numpy's current random state.
+        """
         self.player_dice = []
         self.current_bid = None
         self.bid_history = []
-        self.current_player = 0
+        self.last_bid_player_id = None
+        # Randomly select starting player from all available players
+        if seed is not None:
+            # Use local random generator with seed for reproducible selection
+            rng = np.random.default_rng(seed)
+            self.current_player = rng.integers(0, self.num_players)
+        else:
+            # Use global random state (will use seed if set by gymnasium super().reset())
+            self.current_player = np.random.randint(0, self.num_players)
         self.player_dice_count = [self.dice_per_player] * self.num_players
         self.palifico_active = [False] * self.num_players
         self.special_round_active = False
@@ -67,6 +88,7 @@ class GameState:
         self.believe_called = False
         self.game_over = False
         self.winner = None
+        self.round_number = 0
 
         # Roll dice for all players
         self.roll_dice()
@@ -131,7 +153,10 @@ class GameState:
                 return False
 
         self.current_bid = (quantity, value)
-        self.bid_history.append((player_id, quantity, value))
+        # Encode bid: action_type=0 for bid, encoded_bid = encode_bid(quantity, value)
+        encoded = encode_bid(quantity, value, max_quantity=30)  # max_quantity is typically 30
+        self.bid_history.append((0, encoded))
+        self.last_bid_player_id = player_id
         return True
 
     def _is_bid_higher(self, q1: int, v1: int, q2: int, v2: int) -> bool:
@@ -221,11 +246,8 @@ class GameState:
         if not self.bid_history:
             return False, 0, 0
 
-        # The player who made the bid is the last one in the history
-        previous_player = self.bid_history[-1][0]
-
         # The challenger cannot be the one who made the bid
-        if previous_player == challenger_id:
+        if self.last_bid_player_id == challenger_id:
             # This case should not happen in a well-formed game
             return False, 0, 0
 
@@ -238,6 +260,28 @@ class GameState:
         challenge_success = total_count < quantity
 
         return challenge_success, total_count, quantity
+    
+    def add_challenge_to_history(self) -> None:
+        """
+        Add challenge action to bid_history.
+        
+        Uses encoded_bid from current_bid.
+        """
+        if self.current_bid is not None:
+            quantity, value = self.current_bid
+            encoded = encode_bid(quantity, value, max_quantity=30)
+            self.bid_history.append((1, encoded))  # action_type=1 for challenge
+    
+    def add_believe_to_history(self) -> None:
+        """
+        Add believe action to bid_history.
+        
+        Uses encoded_bid from current_bid.
+        """
+        if self.current_bid is not None:
+            quantity, value = self.current_bid
+            encoded = encode_bid(quantity, value, max_quantity=30)
+            self.bid_history.append((2, encoded))  # action_type=2 for believe
 
     def call_believe(self, caller_id: int) -> Tuple[bool, int]:
         """
@@ -323,17 +367,46 @@ class GameState:
 
     def next_player(self) -> None:
         """Move to next player."""
+        # CRITICAL: If game is already over, don't try to move to next player
+        # This prevents infinite loops when only one player (the winner) has dice
+        # and current_player points to a player without dice
+        if self.game_over:
+            return
+        
+        prev_player = self.current_player
         self.current_player = (self.current_player + 1) % self.num_players
 
         # Skip players with no dice
         max_attempts = self.num_players
         attempts = 0
+        skipped_players = []
         while (
             self.player_dice_count[self.current_player] == 0
             and attempts < max_attempts
         ):
+            skipped_players.append(self.current_player)
             self.current_player = (self.current_player + 1) % self.num_players
             attempts += 1
+        
+        # Debug output for turn transfer (if debug_mode is available from calling context)
+        # Note: We can't access debug_mode directly here, so we'll check if there's a global debug flag
+        try:
+            # Try to import debug mode from train module
+            try:
+                from ..training.train import get_debug_mode
+                if get_debug_mode():
+                    if skipped_players:
+                        skip_str = ", ".join([f"Player {p}" for p in skipped_players])
+                        print(f"[DEBUG TURN] next_player(): Player {prev_player} -> Player {self.current_player} "
+                              f"(пропущены игроки без костей: {skip_str})")
+                    else:
+                        print(f"[DEBUG TURN] next_player(): Player {prev_player} -> Player {self.current_player}")
+            except (ImportError, AttributeError):
+                # Debug mode not available, skip logging
+                pass
+        except Exception:
+            # Silently ignore any errors to prevent crashes
+            pass
         
         # Check if game should be over after skipping players
         # This ensures game_over is set correctly even if all but one player

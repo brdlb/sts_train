@@ -2,7 +2,8 @@
 Helper functions for working with Perudo.
 """
 
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Any
+import logging
 import numpy as np
 from ..training.config import RewardConfig, DEFAULT_CONFIG
 
@@ -100,7 +101,7 @@ def bid_to_action(quantity: int, value: int, max_quantity: int = 30) -> int:
 
 def create_observation_dict(
     current_bid: Optional[Tuple[int, int]],
-    bid_history: List[Tuple[int, int, int]],
+    bid_history: List[Tuple[int, int]],
     player_dice_count: List[int],
     current_player: int,
     palifico_active: List[bool],
@@ -110,13 +111,17 @@ def create_observation_dict(
     max_players: int = 6,
     agent_id: Optional[int] = None,
     num_agents: int = 4,
+    special_round_active: bool = False,
+    round_number: int = 0,
 ) -> Dict[str, np.ndarray]:
     """
     Create observation dictionary for transformer-based agent.
     
     Args:
         current_bid: Current bid (quantity, value)
-        bid_history: Bid history as list of (player_id, quantity, value)
+        bid_history: Action history as list of (action_type, encoded_bid)
+            action_type: 0=bid, 1=challenge, 2=believe
+            encoded_bid: encoded quantity and value via encode_bid(quantity, value)
         player_dice_count: Number of dice for each player
         current_player: Current player
         palifico_active: Palifico flags for each player
@@ -126,21 +131,22 @@ def create_observation_dict(
         max_players: Maximum number of players
         agent_id: Agent ID for one-hot encoding (0 to num_agents-1)
         num_agents: Total number of agents (for one-hot encoding)
+        special_round_active: Whether special round is active
+        round_number: Current round number
     
     Returns:
         Dictionary with 'bid_history' and 'static_info' keys
-        bid_history shape: (max_history_length, 3) - (player_id, quantity, value)
+        bid_history shape: (max_history_length, 2) - (action_type, encoded_bid)
     """
-    # Build bid_history sequence (max_history_length, 3) - player_id, quantity, value
-    # This preserves information about who made each bid, which is crucial for understanding
-    # player strategies and turn order context
-    bid_history_array = np.zeros((max_history_length, 3), dtype=np.int32)
+    # Build bid_history sequence (max_history_length, 2) - action_type, encoded_bid
+    # This preserves information about all actions (bids, challenges, believes) in the game
+    bid_history_array = np.zeros((max_history_length, 2), dtype=np.int32)
     for i in range(max_history_length):
         # Take from end of history (most recent first)
         history_idx = len(bid_history) - 1 - i
         if history_idx >= 0:
-            player_id, quantity, value = bid_history[history_idx]
-            bid_history_array[i] = [player_id, quantity, value]
+            action_type, encoded_bid = bid_history[history_idx]
+            bid_history_array[i] = [action_type, encoded_bid]
         # else: padding (already zeros)
     
     # Build static_info vector
@@ -177,6 +183,12 @@ def create_observation_dict(
     # Believe flag (1 value)
     static_parts.append(np.array([1.0 if believe_called else 0.0], dtype=np.float32))
     
+    # Special round active flag (1 value)
+    static_parts.append(np.array([1.0 if special_round_active else 0.0], dtype=np.float32))
+    
+    # Round number (1 value)
+    static_parts.append(np.array([float(round_number)], dtype=np.float32))
+    
     # Current player's dice (5 values, pad with zeros if less)
     dice_padded = player_dice + [0] * (5 - len(player_dice))
     static_parts.append(np.array(dice_padded[:5], dtype=np.float32))
@@ -192,7 +204,7 @@ def create_observation_dict(
 
 def create_observation_vector(
     current_bid: Optional[Tuple[int, int]],
-    bid_history: List[Tuple[int, int, int]],
+    bid_history: List[Tuple[int, int]],
     player_dice_count: List[int],
     current_player: int,
     palifico_active: List[bool],
@@ -208,7 +220,9 @@ def create_observation_vector(
 
     Args:
         current_bid: Current bid (quantity, value)
-        bid_history: Bid history
+        bid_history: Action history as list of (action_type, encoded_bid)
+            action_type: 0=bid, 1=challenge, 2=believe
+            encoded_bid: encoded quantity and value via encode_bid(quantity, value)
         player_dice_count: Number of dice for each player
         current_player: Current player
         palifico_active: Palifico flags for each player
@@ -240,14 +254,14 @@ def create_observation_vector(
     else:
         obs_parts.append([0, 0])
 
-    # Bid history (last N bids, each = 3 values: player, quantity, value)
+    # Action history (last N actions, each = 2 values: action_type, encoded_bid)
     history_vector = []
     for i in range(history_length):
         if i < len(bid_history):
-            player_id, quantity, value = bid_history[-(i + 1)]  # Take from end
-            history_vector.extend([player_id, quantity, value])
+            action_type, encoded_bid = bid_history[-(i + 1)]  # Take from end
+            history_vector.extend([action_type, encoded_bid])
         else:
-            history_vector.extend([0, 0, 0])
+            history_vector.extend([0, 0])  # Padding: action_type=0, encoded_bid=0
     obs_parts.append(history_vector)
 
     # Number of dice for each player (max_players values)
@@ -285,41 +299,78 @@ def calculate_reward(
     dice_lost: int = 0,
     reward_config: Optional[RewardConfig] = None,
     winner_dice_count: Optional[int] = None,
+    game_state: Optional[Any] = None,
+    bid_quantity: Optional[int] = None,
+    bid_value: Optional[int] = None,
 ) -> float:
     """
-    Calculate reward for agent.
+    Calculate intermediate step reward for agent action.
+
+    This function calculates ONLY intermediate step rewards (bid penalties, challenge rewards, etc.).
+    Final episode rewards (win_reward, win_dice_bonus, lose_penalty, dice_lost_penalty) are
+    calculated separately in RewardManager.calculate_final_reward() to avoid double counting.
 
     Args:
         action_type: Action type ('bid', 'challenge', 'believe')
-        game_over: Whether game is over
-        winner: Winner ID (if game is over)
+        game_over: Whether game is over (not used for final rewards, only for documentation)
+        winner: Winner ID (not used for final rewards, only for documentation)
         player_id: Current player ID
         challenge_success: Whether challenge succeeded (if applicable)
         believe_success: Whether believe succeeded (if applicable)
-        dice_lost: Number of dice lost
+        dice_lost: Number of dice lost (used for challenge/believe failure penalties only)
         reward_config: Reward configuration (uses DEFAULT_CONFIG if not provided)
-        winner_dice_count: Number of dice remaining for winner (if game is over and player won)
+        winner_dice_count: Number of dice remaining for winner (deprecated, not used)
+        game_state: Game state (required for minimal bid calculation)
+        bid_quantity: Bid quantity (required for minimal bid calculation)
+        bid_value: Bid value (required for minimal bid calculation)
 
     Returns:
-        Reward
+        Intermediate step reward (does not include final episode rewards)
     """
     if reward_config is None:
         reward_config = DEFAULT_CONFIG.reward
 
     reward = 0.0
 
-    # Reward for winning game
-    # NOTE: lose_penalty is NOT applied here - it's applied in perudo_vec_env.py
-    # when calculating final reward to avoid double application
-    if game_over and winner == player_id:
-        reward += reward_config.win_reward
-        # Add bonus for remaining dice if winner_dice_count is provided
-        if winner_dice_count is not None and reward_config.win_dice_bonus > 0:
-            reward += reward_config.win_dice_bonus * winner_dice_count
+    # NOTE: Final episode rewards (win_reward, win_dice_bonus, lose_penalty) are NOT applied here.
+    # They are applied only once at episode end in RewardManager.calculate_final_reward()
+    # to avoid double counting. This function only calculates intermediate step rewards.
 
-    # Penalty for losing dice
-    if dice_lost > 0:
-        reward += reward_config.dice_lost_penalty * dice_lost
+    # NOTE: Penalty for losing dice (dice_lost_penalty) is NOT applied here - it's applied only at episode end
+    # in RewardManager.calculate_final_reward() to avoid double counting.
+    # The dice_lost parameter is still used for challenge/believe failure penalties below,
+    # but NOT for the per-die penalty which is calculated separately at episode end.
+
+    # Small penalty for bidding to encourage finishing the round
+    if action_type == "bid":
+        reward += reward_config.bid_small_penalty
+        
+        # Minimal bid incentives (combined approach #4)
+        # Only apply if we have the necessary information
+        if game_state is not None and bid_quantity is not None and bid_value is not None:
+            from ..game.rules import PerudoRules
+            
+            # Get minimal valid bid for current game state
+            # Note: We need to get minimal bid BEFORE the current bid was made
+            # So we temporarily remove current bid to compute minimal
+            minimal_bid = PerudoRules.get_minimal_valid_bid(game_state, player_id)
+            
+            if minimal_bid is not None:
+                min_quantity, min_value = minimal_bid
+                
+                # Check if current bid is exactly minimal
+                if bid_quantity == min_quantity and bid_value == min_value:
+                    # Apply bonus for minimal bid
+                    reward += reward_config.bid_minimal_bonus
+                else:
+                    # Calculate excess (how much quantity exceeds minimum)
+                    # Note: We compare quantity since it's the main factor
+                    excess = bid_quantity - min_quantity
+                    
+                    # Apply penalty only if excess meets threshold
+                    if excess >= reward_config.bid_excess_threshold:
+                        # Penalty proportional to excess
+                        reward += reward_config.bid_excess_penalty * excess
 
     # Intermediate rewards for bluffs and challenges
     if action_type == "challenge" and challenge_success is not None:
@@ -373,4 +424,42 @@ def create_action_mask(
             action_idx = bid_to_action(quantity, value, max_quantity)
             if 0 <= action_idx < action_space_size:
                 mask[action_idx] = True
+    
+    # CRITICAL: Ensure at least one action is valid
+    # If all actions are masked, sb3_contrib cannot normalize probabilities (Simplex constraint violation)
+    # This can happen if get_available_actions returns empty list
+    if not mask.any():
+        # All actions are masked - enable challenge and believe as fallback
+        logger = logging.getLogger(__name__)
+        logger.debug(
+            f"All actions masked in create_action_mask. "
+            f"Enabling challenge (action 0) and believe (action 1) as fallback. "
+            f"Available actions: {available_actions}"
+        )
+        mask[0] = True  # challenge
+        if action_space_size > 1:
+            mask[1] = True  # believe
+    
+    # CRITICAL: Final validation - ensure mask is pure boolean array
+    # This prevents any numerical issues that could cause Simplex constraint violations
+    if mask.dtype != bool:
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            f"Action mask is not boolean (dtype: {mask.dtype}). "
+            f"Converting to boolean."
+        )
+        mask = mask.astype(bool)
+    
+    # CRITICAL: Double-check that at least one action is valid after all processing
+    # This should never happen if get_available_actions works correctly
+    if not mask.any():
+        logger = logging.getLogger(__name__)
+        logger.error(
+            f"CRITICAL: All actions still masked after fallback in create_action_mask. "
+            f"This indicates a serious bug - game state may be invalid. "
+            f"Available actions from get_available_actions: {available_actions}. "
+            f"Enabling all actions as emergency fallback (this will cause invalid actions)."
+        )
+        mask = np.ones(action_space_size, dtype=bool)
+    
     return mask

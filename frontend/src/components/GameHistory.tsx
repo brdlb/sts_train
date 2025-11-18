@@ -1,16 +1,12 @@
 import React from 'react';
 import { ExtendedActionHistoryEntry } from '../services/api';
+import { getPlayerName } from '../utils/playerHelpers';
 
 interface GameHistoryProps {
   bidHistory: Array<[number, number, number]>;
   currentBid: [number, number] | null;
   extendedActionHistory?: ExtendedActionHistoryEntry[];
 }
-
-const getPlayerName = (playerId: number): string => {
-  if (playerId === 0) return 'You (Human)';
-  return `AI Player ${playerId}`;
-};
 
 const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
   const playerName = getPlayerName(entry.player_id);
@@ -64,12 +60,31 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
   const playerNames = ['You (Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
 
   return (
-    <div className="w-full h-full bg-gray-900/80 rounded-lg p-4 shadow-lg flex flex-col border border-gray-700">
-      <h3 className="text-xl font-semibold text-yellow-300 border-b border-yellow-300/30 pb-2 mb-2 flex-shrink-0">Action History</h3>
+    <div className="w-full h-full bg-gray-900/80 rounded-lg p-4 shadow-lg flex flex-col">
+      <h3 className="text-xl font-semibold text-yellow-300 pb-2 mb-2 flex-shrink-0">Action History</h3>
       <div className="flex-grow overflow-y-auto pr-2">
         {extendedActionHistory && extendedActionHistory.length > 0 ? (
           <div className="space-y-2">
-            {extendedActionHistory.filter(entry => entry && entry.consequences).map((entry, index) => {
+            {(() => {
+              // Filter out invalid actions and deduplicate entries
+              const seen = new Set<string>();
+              const filtered = extendedActionHistory
+                .filter(entry => {
+                  if (!entry || !entry.consequences || entry.consequences.action_valid === false) {
+                    return false;
+                  }
+                  // Create unique key for deduplication
+                  const key = `${entry.player_id}-${entry.action_type}-${entry.turn_number}-${entry.action_data?.quantity || ''}-${entry.action_data?.value || ''}`;
+                  if (seen.has(key)) {
+                    return false;
+                  }
+                  seen.add(key);
+                  return true;
+                })
+                .slice()
+                .reverse();
+              
+              return filtered.map((entry, index) => {
               // Validate entry
               if (!entry || !entry.consequences) {
                 return null;
@@ -89,10 +104,13 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                 ? 'text-red-400' // Red for failure
                 : 'text-gray-400'; // Gray for neutral
 
+              // Use a unique key based on entry data
+              const uniqueKey = `${entry.player_id}-${entry.action_type}-${entry.consequences.bid_quantity || ''}-${entry.consequences.bid_value || ''}-${index}`;
+
               return (
                 <div
-                  key={index}
-                  className={`p-3 rounded-lg ${bgColor} border border-gray-700/50 transition-colors`}
+                  key={uniqueKey}
+                  className={`p-3 rounded-lg ${bgColor} transition-colors`}
                 >
                   <div className="font-semibold text-white mb-1">
                     {actionDescription}
@@ -114,7 +132,8 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                   )}
                 </div>
               );
-            })}
+            });
+            })()}
           </div>
         ) : (
           // Fallback to simple bid history if extended history is not available
@@ -122,23 +141,23 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
             {bidHistory.length === 0 && !currentBid && (
               <div className="text-gray-400 italic">No actions yet</div>
             )}
-            {bidHistory.map((bid, index) => {
+            {currentBid && (
+              <div className="p-2 rounded bg-blue-900/30 font-bold text-blue-300">
+                <strong>Current Bid:</strong> {currentBid[0]}x{currentBid[1]}
+              </div>
+            )}
+            {bidHistory.slice().reverse().map((bid, index) => {
               const [playerId, quantity, value] = bid;
               return (
                 <div
-                  key={index}
-                  className={`p-2 rounded ${index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50'} border border-gray-700/50`}
+                  key={`${playerId}-${quantity}-${value}-${index}`}
+                  className={`p-2 rounded ${index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50'}`}
                 >
                   <strong className="text-white">{playerNames[playerId] || `Player ${playerId}`}:</strong> 
                   <span className="text-gray-300 ml-2">{quantity}x{value}</span>
                 </div>
               );
             })}
-            {currentBid && (
-              <div className="p-2 rounded bg-blue-900/30 border border-blue-700/50 font-bold text-blue-300">
-                <strong>Current Bid:</strong> {currentBid[0]}x{currentBid[1]}
-              </div>
-            )}
           </div>
         )}
       </div>

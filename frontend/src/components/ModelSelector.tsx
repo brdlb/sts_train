@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { modelsApi, ModelInfo } from '../services/api';
-import './ModelSelector.css'; // Добавляем CSS для стилизации
 
 interface ModelSelectorProps {
   onStart: (modelPaths: string[]) => void;
@@ -72,20 +71,27 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onStart }) => {
           <p className="text-center text-gray-300 mb-8">Choose models for 3 AI players (you will be player 0)</p>
 
           {models.length === 0 && (
-            <div className="bg-gray-700 border border-gray-600 rounded-lg p-6 text-center text-gray-300">
-              No models available. Please train models first.
+            <div className="bg-gray-700 rounded-lg p-8 text-center">
+              <div className="text-6xl mb-4">🎲</div>
+              <h3 className="text-2xl font-semibold text-white mb-2">No Models Available</h3>
+              <p className="text-gray-300 mb-4">
+                You need to train models before you can start a game.
+              </p>
+              <p className="text-sm text-gray-400">
+                Please train models first using the training scripts.
+              </p>
             </div>
           )}
 
           {models.length > 0 && (
             <div className="space-y-6">
-              <div className="bg-gray-700 border border-gray-600 rounded-lg p-4">
+              <div className="bg-gray-700 rounded-lg p-4">
                 <label className="block text-sm font-semibold text-gray-200 mb-2">
                   Use same model for all AI players:
                 </label>
                 <select
                   onChange={(e) => handleUseSameModel(e.target.value)}
-                  className="w-full px-4 py-2 bg-gray-600 text-white border border-gray-500 rounded-lg focus:outline-none focus:border-green-500 hover:bg-gray-550 transition-colors"
+                  className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 hover:bg-gray-550 transition-colors"
                 >
                   <option value="">Select model...</option>
                   {models.map((model) => (
@@ -98,14 +104,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onStart }) => {
 
               <div className="grid grid-cols-1 gap-4">
                 {[0, 1, 2].map((index) => (
-                  <div key={index} className="bg-gray-700 border border-gray-600 rounded-lg p-4">
+                  <div key={index} className="bg-gray-700 rounded-lg p-4">
                     <label className="block text-sm font-semibold text-gray-200 mb-3">
                       AI Player {index + 1}
                     </label>
                     <select
                       value={selectedModels[index]}
                       onChange={(e) => handleModelChange(index, e.target.value)}
-                      className="w-full px-4 py-2 bg-gray-600 text-white border border-gray-500 rounded-lg focus:outline-none focus:border-green-500 hover:bg-gray-550 transition-colors mb-3"
+                      className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 hover:bg-gray-550 transition-colors mb-3"
                     >
                       <option value="">Select model...</option>
                       {models.map((model) => (

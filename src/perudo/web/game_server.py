@@ -137,6 +137,7 @@ class GameSession:
             min_players=game_config.min_players,  # Must match training config
             max_players=game_config.max_players,  # Must match training config
             reward_config=DEFAULT_CONFIG.reward,
+            auto_advance_round=False,  # Web version requires manual confirmation before advancing to next round
         )
 
         # Reset environment
@@ -213,8 +214,55 @@ class GameSession:
         # Each entry contains: player_id, action_type, action_data, consequences
         self.extended_action_history: List[Dict[str, Any]] = []
 
+        # Flag to track if we're awaiting user confirmation to continue to next round after reveal
+        self.awaiting_reveal_confirmation = False
+
         # Save initial state to DB
         self._save_state_to_db()
+
+    def _sync_state(self, terminated: bool = False, truncated: bool = False) -> None:
+        """
+        Synchronize current_player and game_over from game_state.
+        
+        This method ensures that self.current_player and self.game_over
+        are always in sync with the actual game state.
+        
+        Args:
+            terminated: Whether the environment was terminated
+            truncated: Whether the environment was truncated
+        """
+        self.current_player = self.env.game_state.current_player
+        self.game_over = self.env.game_state.game_over or terminated or truncated
+
+    def _validate_and_fix_state(self) -> None:
+        """
+        Validate and fix current_player if it's out of valid range.
+        
+        This method checks if current_player is within valid bounds
+        and resets it to 0 if invalid.
+        """
+        if self.current_player < 0 or self.current_player >= self.env.game_state.num_players:
+            if web_config.debug:
+                print(f"Warning: Invalid current_player {self.current_player}, resetting to 0")
+            self.current_player = 0
+            self.env.game_state.current_player = 0
+
+    def _serialize_reward(self, reward: Any) -> float:
+        """
+        Serialize reward to float (handles numpy scalars).
+        
+        Args:
+            reward: Reward value (may be numpy scalar, int, or float)
+            
+        Returns:
+            Serialized reward as float
+        """
+        if hasattr(reward, "item"):
+            return float(reward.item())
+        elif isinstance(reward, (int, float)):
+            return float(reward)
+        else:
+            return 0.0
 
     def get_public_state(self) -> Dict[str, Any]:
         """
@@ -225,8 +273,7 @@ class GameSession:
         """
         # Sync state from game_state before returning
         # This ensures current_player and game_over are always up-to-date
-        self.current_player = self.env.game_state.current_player
-        self.game_over = self.env.game_state.game_over
+        self._sync_state()
 
         game_state = self.env.game_state
         public_info = game_state.get_public_info()
@@ -246,10 +293,20 @@ class GameSession:
         actual_player_dice = self.env.game_state.get_player_dice(0)
         player_dice["dice_values"] = list(actual_player_dice)
         
-        # Convert bid_history tuples to lists for JSON serialization
-        bid_history_serializable = [
-            self._serialize_value(bid) for bid in game_state.bid_history
-        ]
+        # Convert bid_history to frontend format [player_id, quantity, value]
+        # Use extended_action_history to get player_id for each bid
+        from ..utils.helpers import decode_bid
+        
+        bid_history_frontend = []
+        for entry in self.extended_action_history:
+            if entry["action_type"] == "bid" and entry["action_data"].get("quantity") is not None:
+                bid_history_frontend.append([
+                    entry["player_id"],
+                    entry["action_data"]["quantity"],
+                    entry["action_data"]["value"]
+                ])
+        
+        bid_history_serializable = bid_history_frontend
         
         # Convert current_bid tuple to list if it exists
         current_bid_serializable = self._serialize_value(game_state.current_bid)
@@ -288,8 +345,10 @@ class GameSession:
             "extended_action_history": extended_history_serializable,
             "palifico_active": self._serialize_value(game_state.palifico_active),
             "believe_called": bool(game_state.believe_called),
+            "last_bid_player_id": game_state.last_bid_player_id if game_state.last_bid_player_id is not None else None,
             "player_dice": player_dice,  # Only human player's dice (converted to lists)
             "public_info": self._serialize_public_info(public_info),
+            "awaiting_reveal_confirmation": bool(self.awaiting_reveal_confirmation),
         }
     
     def _serialize_public_info(self, public_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -356,6 +415,100 @@ class GameSession:
         # This should not happen in normal cases, but provides a safe fallback
         return str(value)
 
+    def _process_action(
+        self,
+        player_id: int,
+        action: int,
+        reward: Any,
+        terminated: bool,
+        truncated: bool,
+        info: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Process an action and update game state.
+        
+        This method handles the common logic for processing any action:
+        - Convert action to readable format
+        - Extract consequences
+        - Save to extended action history
+        - Save to database
+        - Serialize reward
+        - Sync state
+        - Save state to database
+        - Finish game if needed
+        
+        Args:
+            player_id: ID of player who made the action
+            action: Action code
+            reward: Reward from environment
+            terminated: Whether environment was terminated
+            truncated: Whether environment was truncated
+            info: Info dictionary from environment
+            
+        Returns:
+            Dictionary with action result
+        """
+        # Convert action to readable format
+        from ..utils.helpers import action_to_bid
+        action_type, param1, param2 = action_to_bid(action, web_config.max_quantity)
+        
+        action_data = {
+            "action_type": action_type,
+            "quantity": param1 if action_type == "bid" else None,
+            "value": param2 if action_type == "bid" else None,
+        }
+        
+        # Extract consequences from info
+        consequences = self._extract_consequences(info, player_id, action_type)
+        
+        # Add to extended action history
+        self.extended_action_history.append({
+            "player_id": player_id,
+            "action_type": action_type,
+            "action_data": action_data,
+            "consequences": consequences,
+            "turn_number": self.turn_number,
+        })
+        
+        # Save action to DB
+        add_action(
+            SessionLocal(),
+            self.db_game_id,
+            player_id,
+            action_type,
+            action_data,
+            self.turn_number,
+        )
+        
+        # Serialize reward
+        reward_serializable = self._serialize_reward(reward)
+        
+        # Increment turn number
+        self.turn_number += 1
+        
+        # Sync state from game_state after action
+        # This ensures we have the correct state after challenge/believe when rounds restart
+        self._sync_state(terminated, truncated)
+        
+        # Check if round advance is needed (for challenge/believe with auto_advance_round=False)
+        if info.get("needs_round_advance") and not self.game_over:
+            self.awaiting_reveal_confirmation = True
+        
+        # Save state to DB
+        self._save_state_to_db()
+        
+        # If game is over, finish it in DB
+        if self.game_over:
+            finish_game(SessionLocal(), self.db_game_id, self.env.game_state.winner)
+        
+        return {
+            "player_id": player_id,
+            "action": action_data,
+            "reward": reward_serializable,
+            "game_over": self.game_over,
+            "winner": int(self.env.game_state.winner) if self.game_over and self.env.game_state.winner is not None else None,
+        }
+
     def make_human_action(self, action: int) -> Dict[str, Any]:
         """
         Make action for human player.
@@ -378,69 +531,97 @@ class GameSession:
         # Execute action
         obs, reward, terminated, truncated, info = self.env.step(action)
 
-        # Convert action to readable format
-        from ..utils.helpers import action_to_bid
-        action_type, param1, param2 = action_to_bid(action, web_config.max_quantity)
-
-        action_data = {
-            "action_type": action_type,
-            "quantity": param1 if action_type == "bid" else None,
-            "value": param2 if action_type == "bid" else None,
-        }
-
-        # Extract consequences from info
-        consequences = self._extract_consequences(info, 0, action_type)
-
-        # Add to extended action history
-        self.extended_action_history.append({
-            "player_id": 0,
-            "action_type": action_type,
-            "action_data": action_data,
-            "consequences": consequences,
-            "turn_number": self.turn_number,
-        })
-
-        # Save action to DB
-        add_action(
-            SessionLocal(),
-            self.db_game_id,
-            0,
-            action_type,
-            action_data,
-            self.turn_number,
-        )
-
-        self.turn_number += 1
-
-        # CRITICAL: Sync current_player and game_over from game_state after action
-        # This ensures we have the correct state after challenge/believe when rounds restart
-        self.current_player = self.env.game_state.current_player
-        self.game_over = self.env.game_state.game_over or terminated or truncated
-
-        # Save state to DB
-        self._save_state_to_db()
-
-        # Serialize reward (may be numpy scalar)
-        if hasattr(reward, "item"):
-            reward_serializable = float(reward.item())
-        elif isinstance(reward, (int, float)):
-            reward_serializable = float(reward)
-        else:
-            reward_serializable = 0.0
+        # Process action using common method
+        result = self._process_action(0, action, reward, terminated, truncated, info)
         
-        result = {
-            "success": True,
-            "action": action_data,
-            "reward": reward_serializable,
-            "game_over": self.game_over,
-            "winner": int(self.env.game_state.winner) if self.game_over and self.env.game_state.winner is not None else None,
-        }
-
-        # If game is over, finish it in DB
-        if self.game_over:
-            finish_game(SessionLocal(), self.db_game_id, self.env.game_state.winner)
-
+        # Add success flag for human actions
+        result["success"] = True
+        
         return result
+
+    def _process_ai_turn_loop(self, streaming: bool = False):
+        """
+        Common loop for processing AI turns.
+        
+        This method processes all AI turns until it's human's turn or game is over.
+        It always works as a generator, yielding results one by one.
+        
+        Args:
+            streaming: If True, include full state in results; if False, minimal results
+            
+        Yields:
+            Dictionary with action result (and updated game state if streaming=True)
+        """
+        # Sync state from game_state
+        self._sync_state()
+        
+        # Validate and fix state
+        self._validate_and_fix_state()
+        
+        max_steps = 100  # Protection against infinite loops
+        step_count = 0
+        
+        while not self.game_over and self.current_player != 0 and step_count < max_steps:
+            step_count += 1
+            
+            # Sync state from game_state before making decisions
+            self._sync_state()
+            
+            # Validate state after sync
+            if self.current_player < 0 or self.current_player >= self.env.game_state.num_players:
+                if web_config.debug:
+                    print(f"Warning: Invalid current_player {self.current_player} after sync, breaking")
+                break
+            
+            # Check if game ended after sync
+            if self.game_over:
+                break
+            
+            # Check if it's human's turn (player 0)
+            if self.current_player == 0:
+                break
+            
+            ai_player_id = self.current_player
+            
+            # Skip players with no dice - they have already lost and cannot make moves
+            if self.env.game_state.player_dice_count[ai_player_id] == 0:
+                # Player has no dice, skip to next player with dice
+                self.env.game_state.next_player()
+                self._sync_state()
+                # Check if game ended after skipping players
+                if self.game_over:
+                    break
+                # Continue to next iteration to check next player
+                continue
+            
+            # Check if this is an AI player
+            if ai_player_id not in self.ai_agents:
+                # Not an AI player (shouldn't happen, but handle gracefully)
+                break
+            
+            # Get observation for AI player
+            obs = self.env.get_observation_for_player(ai_player_id)
+            self.env.set_active_player(ai_player_id)
+            
+            # Add random delay (1-4 seconds) before bot makes a move
+            delay = random.uniform(1.0, 4.0)
+            time.sleep(delay)
+            
+            # Get action from AI agent
+            ai_agent = self.ai_agents[ai_player_id]
+            action = ai_agent.act(obs, deterministic=True)
+            
+            # Execute action
+            obs, reward, terminated, truncated, info = self.env.step(action)
+            
+            # Process action using common method
+            result = self._process_action(ai_player_id, action, reward, terminated, truncated, info)
+            
+            # Add state to result for streaming mode
+            if streaming:
+                result["state"] = self.get_public_state()
+            
+            yield result
 
     def process_ai_turns(self) -> List[Dict[str, Any]]:
         """
@@ -449,148 +630,20 @@ class GameSession:
         This method follows the same logic as perudo_vec_env.py to ensure
         turn order is consistent with training.
 
-
         Returns:
             List of actions taken by AI players
         """
-        actions_taken = []
-
-        # Use game_state.current_player as the single source of truth
-        # Sync self.current_player and self.game_over from game_state
-        self.current_player = self.env.game_state.current_player
-        self.game_over = self.env.game_state.game_over
-
-        # Safety check: validate current_player is within valid range
-        if self.current_player < 0 or self.current_player >= self.env.game_state.num_players:
-            if web_config.debug:
-                print(f"Warning: Invalid current_player {self.current_player}, resetting to 0")
-            self.current_player = 0
-            self.env.game_state.current_player = 0
-
-        max_steps = 100  # Protection against infinite loops
-        step_count = 0
-
-        while not self.game_over and self.current_player != 0 and step_count < max_steps:
-            step_count += 1
-
-            # CRITICAL: Use game_state.current_player as the single source of truth
-            # Always sync from game_state before making decisions
-            self.current_player = self.env.game_state.current_player
-            self.game_over = self.env.game_state.game_over
-
-            # Safety check: validate current_player is within valid range
-            if self.current_player < 0 or self.current_player >= self.env.game_state.num_players:
-                if web_config.debug:
-                    print(f"Warning: Invalid current_player {self.current_player} after sync, breaking")
-                break
-
-            # Check if game ended after sync
-            if self.game_over:
-                break
-
-            # Check if it's human's turn (player 0)
-            if self.current_player == 0:
-                break
-
-            ai_player_id = self.current_player
-
-            # CRITICAL: Skip players with no dice - they have already lost and cannot make moves
-            # Players with 0 dice are eliminated and should be automatically skipped
-            # This matches the logic in perudo_vec_env.py
-            if self.env.game_state.player_dice_count[ai_player_id] == 0:
-                # Player has no dice, skip to next player with dice
-                # Use next_player() which automatically skips players with 0 dice
-                self.env.game_state.next_player()
-                self.current_player = self.env.game_state.current_player
-                self.game_over = self.env.game_state.game_over
-                # Check if game ended after skipping players
-                if self.game_over:
-                    break
-                # Continue to next iteration to check next player
-                continue
-
-            # Check if this is an AI player
-            if ai_player_id not in self.ai_agents:
-                # Not an AI player (shouldn't happen, but handle gracefully)
-                break
-
-            # Get observation for AI player
-            obs = self.env.get_observation_for_player(ai_player_id)
-            self.env.set_active_player(ai_player_id)
-
-            # Add random delay (1-4 seconds) before bot makes a move
-            # This makes the game feel more natural when playing with humans
-            delay = random.uniform(1.0, 4.0)
-            time.sleep(delay)
-
-            # Get action from AI agent
-            ai_agent = self.ai_agents[ai_player_id]
-            action = ai_agent.act(obs, deterministic=True)
-
-            # Execute action
-            obs, reward, terminated, truncated, info = self.env.step(action)
-
-            # Convert action to readable format
-            from ..utils.helpers import action_to_bid
-            action_type, param1, param2 = action_to_bid(action, web_config.max_quantity)
-
-            action_data = {
-                "action_type": action_type,
-                "quantity": param1 if action_type == "bid" else None,
-                "value": param2 if action_type == "bid" else None,
+        # Collect results from generator into list
+        results = list(self._process_ai_turn_loop(streaming=False))
+        # Extract only essential fields for non-streaming mode
+        return [
+            {
+                "player_id": result["player_id"],
+                "action": result["action"],
+                "reward": result["reward"],
             }
-
-            # Extract consequences from info
-            consequences = self._extract_consequences(info, ai_player_id, action_type)
-
-            # Add to extended action history
-            self.extended_action_history.append({
-                "player_id": ai_player_id,
-                "action_type": action_type,
-                "action_data": action_data,
-                "consequences": consequences,
-                "turn_number": self.turn_number,
-            })
-
-            # Save action to DB
-            add_action(
-                SessionLocal(),
-                self.db_game_id,
-                ai_player_id,
-                action_type,
-                action_data,
-                self.turn_number,
-            )
-
-            # Serialize reward (may be numpy scalar)
-            if hasattr(reward, "item"):
-                reward_serializable = float(reward.item())
-            elif isinstance(reward, (int, float)):
-                reward_serializable = float(reward)
-            else:
-                reward_serializable = 0.0
-            
-            actions_taken.append({
-                "player_id": ai_player_id,
-                "action": action_data,
-                "reward": reward_serializable,
-            })
-
-            self.turn_number += 1
-
-            # CRITICAL: Sync current_player and game_over from game_state after each action
-            # This ensures we have the correct state after challenge/believe when rounds restart
-            self.current_player = self.env.game_state.current_player
-            self.game_over = self.env.game_state.game_over or terminated or truncated
-
-            # Save state to DB
-            self._save_state_to_db()
-
-            # If game is over, finish it in DB
-            if self.game_over:
-                finish_game(SessionLocal(), self.db_game_id, self.env.game_state.winner)
-
-        return actions_taken
+            for result in results
+        ]
 
     def process_ai_turns_streaming(self):
         """
@@ -602,144 +655,7 @@ class GameSession:
         Yields:
             Dictionary with action result and updated game state
         """
-        # Use game_state.current_player as the single source of truth
-        # Sync self.current_player and self.game_over from game_state
-        self.current_player = self.env.game_state.current_player
-        self.game_over = self.env.game_state.game_over
-
-        # Safety check: validate current_player is within valid range
-        if self.current_player < 0 or self.current_player >= self.env.game_state.num_players:
-            if web_config.debug:
-                print(f"Warning: Invalid current_player {self.current_player}, resetting to 0")
-            self.current_player = 0
-            self.env.game_state.current_player = 0
-
-        max_steps = 100  # Protection against infinite loops
-        step_count = 0
-
-        while not self.game_over and self.current_player != 0 and step_count < max_steps:
-            step_count += 1
-
-            # CRITICAL: Use game_state.current_player as the single source of truth
-            # Always sync from game_state before making decisions
-            self.current_player = self.env.game_state.current_player
-            self.game_over = self.env.game_state.game_over
-
-            # Safety check: validate current_player is within valid range
-            if self.current_player < 0 or self.current_player >= self.env.game_state.num_players:
-                if web_config.debug:
-                    print(f"Warning: Invalid current_player {self.current_player} after sync, breaking")
-                break
-
-            # Check if game ended after sync
-            if self.game_over:
-                break
-
-            # Check if it's human's turn (player 0)
-            if self.current_player == 0:
-                break
-
-            ai_player_id = self.current_player
-
-            # CRITICAL: Skip players with no dice - they have already lost and cannot make moves
-            # Players with 0 dice are eliminated and should be automatically skipped
-            # This matches the logic in perudo_vec_env.py
-            if self.env.game_state.player_dice_count[ai_player_id] == 0:
-                # Player has no dice, skip to next player with dice
-                # Use next_player() which automatically skips players with 0 dice
-                self.env.game_state.next_player()
-                self.current_player = self.env.game_state.current_player
-                self.game_over = self.env.game_state.game_over
-                # Check if game ended after skipping players
-                if self.game_over:
-                    break
-                # Continue to next iteration to check next player
-                continue
-
-            # Check if this is an AI player
-            if ai_player_id not in self.ai_agents:
-                # Not an AI player (shouldn't happen, but handle gracefully)
-                break
-
-            # Get observation for AI player
-            obs = self.env.get_observation_for_player(ai_player_id)
-            self.env.set_active_player(ai_player_id)
-
-            # Add random delay (1-4 seconds) before bot makes a move
-            # This makes the game feel more natural when playing with humans
-            delay = random.uniform(1.0, 4.0)
-            time.sleep(delay)
-
-            # Get action from AI agent
-            ai_agent = self.ai_agents[ai_player_id]
-            action = ai_agent.act(obs, deterministic=True)
-
-            # Execute action
-            obs, reward, terminated, truncated, info = self.env.step(action)
-
-            # Convert action to readable format
-            from ..utils.helpers import action_to_bid
-            action_type, param1, param2 = action_to_bid(action, web_config.max_quantity)
-
-            action_data = {
-                "action_type": action_type,
-                "quantity": param1 if action_type == "bid" else None,
-                "value": param2 if action_type == "bid" else None,
-            }
-
-            # Extract consequences from info
-            consequences = self._extract_consequences(info, ai_player_id, action_type)
-
-            # Add to extended action history
-            self.extended_action_history.append({
-                "player_id": ai_player_id,
-                "action_type": action_type,
-                "action_data": action_data,
-                "consequences": consequences,
-                "turn_number": self.turn_number,
-            })
-
-            # Save action to DB
-            add_action(
-                SessionLocal(),
-                self.db_game_id,
-                ai_player_id,
-                action_type,
-                action_data,
-                self.turn_number,
-            )
-
-            # Serialize reward (may be numpy scalar)
-            if hasattr(reward, "item"):
-                reward_serializable = float(reward.item())
-            elif isinstance(reward, (int, float)):
-                reward_serializable = float(reward)
-            else:
-                reward_serializable = 0.0
-
-            self.turn_number += 1
-
-            # CRITICAL: Sync current_player and game_over from game_state after each action
-            # This ensures we have the correct state after challenge/believe when rounds restart
-            self.current_player = self.env.game_state.current_player
-            self.game_over = self.env.game_state.game_over or terminated or truncated
-
-            # Save state to DB
-            self._save_state_to_db()
-
-            # If game is over, finish it in DB
-            if self.game_over:
-                finish_game(SessionLocal(), self.db_game_id, self.env.game_state.winner)
-
-            # Yield the result for this turn
-            yield {
-                "player_id": ai_player_id,
-                "action": action_data,
-                "reward": reward_serializable,
-                "state": self.get_public_state(),
-                "game_over": self.game_over,
-                "winner": int(self.env.game_state.winner) if self.game_over and self.env.game_state.winner is not None else None,
-            }
+        yield from self._process_ai_turn_loop(streaming=True)
 
     def _extract_consequences(self, info: Dict[str, Any], player_id: int, action_type: str) -> Dict[str, Any]:
         """
@@ -895,7 +811,41 @@ class GameSession:
             int(count) for count in game_state.player_dice_count
         ]
         
+        # Add all player dice values for reveal (challenge/believe only)
+        # This allows frontend to show all dice during reveal phase
+        if action_type in ("challenge", "believe"):
+            all_player_dice = []
+            for player_id in range(game_state.num_players):
+                player_dice = game_state.get_player_dice(player_id)
+                all_player_dice.append([int(die) for die in player_dice])
+            consequences["all_player_dice"] = all_player_dice
+        
         return consequences
+
+    def continue_to_next_round(self) -> None:
+        """
+        Continue to the next round after reveal confirmation.
+        
+        This method should be called when the user has viewed the reveal modal
+        and is ready to proceed to the next round.
+        
+        Raises:
+            RuntimeError: If not awaiting reveal confirmation
+        """
+        if not self.awaiting_reveal_confirmation:
+            raise RuntimeError("Not awaiting reveal confirmation")
+        
+        # Advance to next round in environment
+        self.env.advance_to_next_round()
+        
+        # Clear the awaiting flag
+        self.awaiting_reveal_confirmation = False
+        
+        # Sync state after round advance
+        self._sync_state()
+        
+        # Save state to DB
+        self._save_state_to_db()
 
     def _save_state_to_db(self):
         """Save current game state to database."""

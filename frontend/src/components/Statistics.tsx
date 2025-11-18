@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { statisticsApi, gamesApi, PlayerStatistics, ModelStatistics, GameHistory } from '../services/api';
 import { GameHistoryModal } from './GameHistoryModal';
-import './Statistics.css'; // Добавляем CSS для стилизации
+import { useToastContext } from '../contexts/ToastContext';
 import { Bar, Line } from 'react-chartjs-2'; // Подключаем графики
 import {
   Chart as ChartJS,
@@ -35,6 +35,7 @@ export const Statistics: React.FC = () => {
   const [selectedHistory, setSelectedHistory] = useState<GameHistory | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [chartKey, setChartKey] = useState<number>(0);
+  const { showToast } = useToastContext();
 
   useEffect(() => {
     loadStatistics();
@@ -70,7 +71,7 @@ export const Statistics: React.FC = () => {
       setSelectedHistory(history);
     } catch (err) {
       console.error('Failed to load game history:', err);
-      alert('Не удалось загрузить историю игры');
+      showToast('Не удалось загрузить историю игры', 'error');
     } finally {
       setLoadingHistory(false);
     }
@@ -81,16 +82,20 @@ export const Statistics: React.FC = () => {
   };
 
   if (loading) {
-    return <div className="loading">Loading statistics...</div>;
+    return (
+      <div className="text-center text-lg text-gray-500 p-8">
+        Loading statistics...
+      </div>
+    );
   }
 
   return (
-    <div className="statistics">
-      <h2>Statistics</h2>
+    <div className="p-5 max-w-6xl mx-auto">
+      <h2 className="text-3xl font-bold text-white mb-6">Statistics</h2>
 
       {playerStats && (
-        <div className="player-stats">
-          <h3>Your Statistics</h3>
+        <div className="mb-8 p-5 rounded-lg bg-gray-700/50">
+          <h3 className="text-xl font-semibold text-white mb-4">Your Statistics</h3>
           <Bar
             key={`player-stats-chart-${chartKey}`}
             data={{
@@ -131,70 +136,79 @@ export const Statistics: React.FC = () => {
       )}
 
       {modelStats && Object.keys(modelStats).length > 0 && (
-        <div className="model-stats">
-          <h3>Model Statistics</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Games</th>
-                <th>Wins</th>
-                <th>Winrate</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(modelStats).map(([modelPath, stats]) => (
-                <tr key={modelPath}>
-                  <td>{modelPath}</td>
-                  <td>{stats.games_count}</td>
-                  <td>{stats.wins_count}</td>
-                  <td>{(stats.winrate * 100).toFixed(1)}%</td>
+        <div className="mb-8 p-5 rounded-lg bg-gray-700/50">
+          <h3 className="text-xl font-semibold text-white mb-4">Model Statistics</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className="p-2.5 text-left text-white">Model</th>
+                  <th className="p-2.5 text-left text-white">Games</th>
+                  <th className="p-2.5 text-left text-white">Wins</th>
+                  <th className="p-2.5 text-left text-white">Winrate</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {Object.entries(modelStats).map(([modelPath, stats]) => (
+                  <tr key={modelPath} className="hover:bg-gray-600/50">
+                    <td className="p-2.5 text-gray-200">{modelPath}</td>
+                    <td className="p-2.5 text-gray-200">{stats.games_count}</td>
+                    <td className="p-2.5 text-gray-200">{stats.wins_count}</td>
+                    <td className="p-2.5 text-gray-200">{(stats.winrate * 100).toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {games.length > 0 && (
-        <div className="recent-games">
-          <h3>Recent Games</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Created</th>
-                <th>Finished</th>
-                <th>Winner</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {games.map((game) => (
-                <tr
-                  key={game.id}
-                  onClick={() => {
-                    if (game.is_finished && !loadingHistory) {
-                      handleGameClick(game.id);
-                    }
-                  }}
-                >
-                  <td>{game.created_at ? new Date(game.created_at).toLocaleString() : '-'}</td>
-                  <td>{game.finished_at ? new Date(game.finished_at).toLocaleString() : '-'}</td>
-                  <td>{game.winner !== null ? `Player ${game.winner}` : '-'}</td>
-                  <td>{game.is_finished ? 'Finished' : 'Active'}</td>
-                  <td>
-                    <button
-                      onClick={() => handleGameClick(game.id)}
-                      disabled={loadingHistory || !game.is_finished}
-                    >
-                      {loadingHistory ? 'Загрузка...' : 'История'}
-                    </button>
-                  </td>
+        <div className="mb-8 p-5 rounded-lg bg-gray-700/50">
+          <h3 className="text-xl font-semibold text-white mb-4">Recent Games</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className="p-2.5 text-left text-white">Created</th>
+                  <th className="p-2.5 text-left text-white">Finished</th>
+                  <th className="p-2.5 text-left text-white">Winner</th>
+                  <th className="p-2.5 text-left text-white">Status</th>
+                  <th className="p-2.5 text-left text-white">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {games.map((game) => (
+                  <tr
+                    key={game.id}
+                    onClick={() => {
+                      if (game.is_finished && !loadingHistory) {
+                        handleGameClick(game.id);
+                      }
+                    }}
+                    className="hover:bg-gray-600/50 cursor-pointer"
+                  >
+                    <td className="p-2.5 text-gray-200">{game.created_at ? new Date(game.created_at).toLocaleString() : '-'}</td>
+                    <td className="p-2.5 text-gray-200">{game.finished_at ? new Date(game.finished_at).toLocaleString() : '-'}</td>
+                    <td className="p-2.5 text-gray-200">{game.winner !== null ? `Player ${game.winner}` : '-'}</td>
+                    <td className="p-2.5 text-gray-200">{game.is_finished ? 'Finished' : 'Active'}</td>
+                    <td className="p-2.5">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleGameClick(game.id);
+                        }}
+                        disabled={loadingHistory || !game.is_finished}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded transition-colors"
+                      >
+                        {loadingHistory ? 'Загрузка...' : 'История'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

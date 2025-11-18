@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { gamesApi, GameState, ExtendedActionHistoryEntry } from '../services/api';
 import Player from './Player';
 import BidControls from './BidControls';
 import { GameHistory } from './GameHistory';
 import Modal from './Modal';
+import DiceRevealModal from './DiceRevealModal';
+import GameOverModal from './GameOverModal';
 import { encode_bid } from '../utils/actions';
 import { PLAYER_NAMES } from '../constants';
 
@@ -19,234 +21,23 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   const [processing, setProcessing] = useState(false);
   const [gamePhase, setGamePhase] = useState<'bidding' | 'reveal' | 'round_over' | 'game_over'>('bidding');
   const [modalContent, setModalContent] = useState<{ title: string; body: React.ReactNode } | null>(null);
+  const [revealModalEntry, setRevealModalEntry] = useState<ExtendedActionHistoryEntry | null>(null);
   const [lastActionHistoryLength, setLastActionHistoryLength] = useState(0);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const isMountedRef = useRef(true);
   
   // Refs for auto-scrolling
   const playerRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const bidControlsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    loadGameState();
-    // Poll for game state updates (only when not processing AI turns)
-    const interval = setInterval(() => {
-      if (!gameState?.game_over && !processing && !eventSourceRef.current) {
-        loadGameState();
-      }
-    }, 2000); // Poll every 2 seconds
-
+    isMountedRef.current = true;
     return () => {
-      clearInterval(interval);
-      // Cleanup SSE connection
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
+      isMountedRef.current = false;
     };
-  }, [gameId, gameState?.game_over, processing]);
+  }, []);
 
-  // Check for new challenge/believe results
-  useEffect(() => {
-    if (!gameState?.extended_action_history) return;
-    
-    const currentLength = gameState.extended_action_history.length;
-    if (currentLength > lastActionHistoryLength) {
-      const newEntries = gameState.extended_action_history.slice(lastActionHistoryLength);
-      
-      // Check if any new entry is a challenge or believe with consequences
-      for (const entry of newEntries) {
-        if ((entry.action_type === 'challenge' || entry.action_type === 'believe') && entry.consequences) {
-          const consequences = entry.consequences;
-          const challengerName = PLAYER_NAMES[entry.player_id] || `Player ${entry.player_id}`;
-          const bidderName = consequences.bidder_id !== null && consequences.bidder_id !== undefined
-            ? (PLAYER_NAMES[consequences.bidder_id] || `Player ${consequences.bidder_id}`)
-            : 'another player';
-          
-          let title = '';
-          let body = '';
-          
-          if (entry.action_type === 'challenge') {
-            title = `${challengerName} challenged the bid!`;
-            const bidInfo = consequences.bid_quantity && consequences.bid_value
-              ? `${consequences.bid_quantity}x${consequences.bid_value}`
-              : 'the bid';
-            
-            if (consequences.challenge_success === true) {
-              body = `The bid ${bidInfo} from ${bidderName} was incorrect! ${bidderName} lost a die.`;
-            } else if (consequences.challenge_success === false) {
-              body = `The bid ${bidInfo} from ${bidderName} was correct! ${challengerName} lost a die.`;
-            } else {
-              body = `${challengerName} challenged ${bidInfo} from ${bidderName}.`;
-            }
-            
-            if (consequences.actual_count !== null) {
-              body += ` Actual count: ${consequences.actual_count}.`;
-            }
-          } else if (entry.action_type === 'believe') {
-            title = `${challengerName} believed the bid!`;
-            const bidInfo = consequences.bid_quantity && consequences.bid_value
-              ? `${consequences.bid_quantity}x${consequences.bid_value}`
-              : 'the bid';
-            
-            if (consequences.believe_success === true) {
-              body = `The bid ${bidInfo} from ${bidderName} was exact! ${challengerName} gained an advantage.`;
-            } else if (consequences.believe_success === false) {
-              body = `The bid ${bidInfo} from ${bidderName} was not exact! ${challengerName} lost a die.`;
-            } else {
-              body = `${challengerName} believed ${bidInfo} from ${bidderName}.`;
-            }
-            
-            if (consequences.actual_count !== null) {
-              body += ` Actual count: ${consequences.actual_count}.`;
-            }
-          }
-          
-          if (title && body) {
-            setGamePhase('round_over');
-            setModalContent({ 
-              title, 
-              body: <p dangerouslySetInnerHTML={{ __html: body.replace(/\n/g, '<br/>') }} /> 
-            });
-            
-            // Auto-close modal after 3 seconds and continue
-            setTimeout(() => {
-              setModalContent(null);
-              setGamePhase('bidding');
-            }, 3000);
-          }
-        }
-      }
-      
-      setLastActionHistoryLength(currentLength);
-    }
-  }, [gameState?.extended_action_history, lastActionHistoryLength]);
-
-  // Auto-scroll to current player
-  useEffect(() => {
-    if (!gameState) return;
-
-    const timeoutId = setTimeout(() => {
-      const currentPlayer = gameState.current_player;
-      if (currentPlayer === 0) {
-        bidControlsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      } else {
-        const playerElement = playerRefs.current[currentPlayer];
-        playerElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }, 700);
-
-    return () => clearTimeout(timeoutId);
-  }, [gameState?.current_player, gameState?.turn_number]);
-
-  const loadGameState = async () => {
-    try {
-      const state = await gamesApi.getState(gameId);
-      setGameState(state);
-      setLoading(false);
-      setError(null);
-      
-      if (state.extended_action_history) {
-        setLastActionHistoryLength(state.extended_action_history.length);
-      }
-
-      if (state.game_over) {
-        setGamePhase('game_over');
-        onGameEnd();
-      } else if (state.current_player !== 0 && !eventSourceRef.current) {
-        // If it's AI's turn and we're not already subscribed, subscribe to AI turns
-        subscribeToAiTurns();
-      }
-    } catch (err) {
-      setError('Failed to load game state');
-      console.error(err);
-      setLoading(false);
-    }
-  };
-
-  const handleBid = async (quantity: number, value: number) => {
-    if (!gameState || processing) return;
-
-    try {
-      setProcessing(true);
-      const action = encode_bid(quantity, value);
-      const result = await gamesApi.makeAction(gameId, action);
-      setGameState(result.state);
-      
-      if (result.state.extended_action_history) {
-        setLastActionHistoryLength(result.state.extended_action_history.length);
-      }
-
-      if (result.game_over) {
-        setGamePhase('game_over');
-        onGameEnd();
-      } else {
-        // Subscribe to AI turns stream
-        subscribeToAiTurns();
-      }
-    } catch (err) {
-      setError('Failed to make bid');
-      console.error(err);
-      setProcessing(false);
-    }
-  };
-
-  const handleChallenge = async () => {
-    if (!gameState || processing) return;
-
-    try {
-      setProcessing(true);
-      setGamePhase('reveal');
-      const result = await gamesApi.makeAction(gameId, 0); // 0 = challenge
-      setGameState(result.state);
-      
-      if (result.state.extended_action_history) {
-        setLastActionHistoryLength(result.state.extended_action_history.length);
-      }
-
-      if (result.game_over) {
-        setGamePhase('game_over');
-        onGameEnd();
-      } else {
-        // Subscribe to AI turns stream
-        subscribeToAiTurns();
-      }
-    } catch (err) {
-      setError('Failed to challenge');
-      console.error(err);
-      setProcessing(false);
-      setGamePhase('bidding');
-    }
-  };
-
-  const handleBelieve = async () => {
-    if (!gameState || processing) return;
-
-    try {
-      setProcessing(true);
-      setGamePhase('reveal');
-      const result = await gamesApi.makeAction(gameId, 1); // 1 = believe
-      setGameState(result.state);
-      
-      if (result.state.extended_action_history) {
-        setLastActionHistoryLength(result.state.extended_action_history.length);
-      }
-
-      if (result.game_over) {
-        setGamePhase('game_over');
-        onGameEnd();
-      } else {
-        // Subscribe to AI turns stream
-        subscribeToAiTurns();
-      }
-    } catch (err) {
-      setError('Failed to call believe');
-      console.error(err);
-      setProcessing(false);
-      setGamePhase('bidding');
-    }
-  };
-
-  const subscribeToAiTurns = () => {
+  const subscribeToAiTurns = useCallback(() => {
     // Close any existing connection
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -303,7 +94,215 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     );
 
     eventSourceRef.current = eventSource;
+  }, [gameId, onGameEnd]);
+
+  const loadGameState = useCallback(async (skipSSECheck: boolean = false) => {
+    if (!isMountedRef.current) return;
+    
+    // Do not load state if SSE is active to avoid race conditions and duplicate updates
+    // Skip this check for initial load or when explicitly requested
+    if (!skipSSECheck && (eventSourceRef.current || processing)) {
+      return;
+    }
+    
+    try {
+      const state = await gamesApi.getState(gameId);
+      if (!isMountedRef.current) return;
+      
+      // Double-check that SSE didn't start while we were fetching (only if not initial load)
+      if (!skipSSECheck && (eventSourceRef.current || processing)) {
+        return;
+      }
+      
+      setGameState(state);
+      setLoading(false);
+      setError(null);
+      
+      if (state.extended_action_history) {
+        setLastActionHistoryLength(state.extended_action_history.length);
+      }
+
+      if (state.game_over) {
+        setGamePhase('game_over');
+        onGameEnd();
+      } else if (state.current_player === 0) {
+        // If it's human's turn, ensure processing is false to enable controls
+        setProcessing(false);
+      } else if (state.current_player !== 0 && !eventSourceRef.current) {
+        // If it's AI's turn and we're not already subscribed, subscribe to AI turns
+        subscribeToAiTurns();
+      }
+    } catch (err) {
+      if (!isMountedRef.current) return;
+      setError('Failed to load game state');
+      console.error(err);
+      setLoading(false);
+    }
+  }, [gameId, onGameEnd, subscribeToAiTurns, processing]);
+
+  useEffect(() => {
+    if (!isMountedRef.current) return;
+    
+    // Initial load - skip SSE check for first load
+    loadGameState(true);
+    // Poll for game state updates (only when not processing AI turns and not human's turn)
+    // IMPORTANT: Do not poll when processing is true or SSE is active to avoid race conditions
+    const interval = setInterval(() => {
+      // Check conditions at the time of execution, not when interval was created
+      if (
+        isMountedRef.current && 
+        !gameState?.game_over && 
+        !processing && 
+        !eventSourceRef.current && 
+        gameState?.current_player !== 0
+      ) {
+        loadGameState(false);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    return () => {
+      clearInterval(interval);
+      // Cleanup SSE connection
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, [gameId, loadGameState, gameState?.game_over, processing, gameState?.current_player]);
+
+  // Check for new challenge/believe results
+  useEffect(() => {
+    if (!gameState?.extended_action_history) return;
+    
+    const currentLength = gameState.extended_action_history.length;
+    if (currentLength > lastActionHistoryLength) {
+      const newEntries = gameState.extended_action_history.slice(lastActionHistoryLength);
+      
+      // Find the LAST challenge/believe entry with all_player_dice (most recent)
+      let lastRevealEntry: ExtendedActionHistoryEntry | null = null;
+      for (const entry of newEntries) {
+        if ((entry.action_type === 'challenge' || entry.action_type === 'believe') && 
+            entry.consequences && 
+            entry.consequences.all_player_dice) {
+          lastRevealEntry = entry;
+        }
+      }
+      
+      // Show modal only for the last entry with all_player_dice
+      if (lastRevealEntry) {
+        setGamePhase('round_over');
+        setRevealModalEntry(lastRevealEntry);
+      }
+      
+      // Update lastActionHistoryLength at the end
+      setLastActionHistoryLength(currentLength);
+    }
+  }, [gameState?.extended_action_history, lastActionHistoryLength]);
+
+  // Auto-scroll to current player
+  useEffect(() => {
+    if (!gameState) return;
+
+    const timeoutId = setTimeout(() => {
+      const currentPlayer = gameState.current_player;
+      if (currentPlayer === 0) {
+        bidControlsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else {
+        const playerElement = playerRefs.current[currentPlayer];
+        playerElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 700);
+
+    return () => clearTimeout(timeoutId);
+  }, [gameState?.current_player, gameState?.turn_number]);
+
+  // Optimize ref callback to avoid unnecessary re-renders
+  // Must be called before any conditional returns to follow Rules of Hooks
+  const setPlayerRef = useCallback((playerId: number) => {
+    return (el: HTMLDivElement | null) => {
+      playerRefs.current[playerId] = el;
+    };
+  }, []);
+
+  const handleBid = async (quantity: number, value: number) => {
+    if (!gameState || processing) return;
+
+    try {
+      setProcessing(true);
+      const action = encode_bid(quantity, value);
+      const result = await gamesApi.makeAction(gameId, action);
+      setGameState(result.state);
+      
+      if (result.state.extended_action_history) {
+        setLastActionHistoryLength(result.state.extended_action_history.length);
+      }
+
+      if (result.game_over) {
+        setGamePhase('game_over');
+        onGameEnd();
+      } else {
+        // Subscribe to AI turns stream
+        subscribeToAiTurns();
+      }
+    } catch (err) {
+      setError('Failed to make bid');
+      console.error(err);
+      setProcessing(false);
+    }
   };
+
+  const handleChallenge = async () => {
+    if (!gameState || processing) return;
+
+    try {
+      setProcessing(true);
+      setGamePhase('reveal');
+      const result = await gamesApi.makeAction(gameId, 0); // 0 = challenge
+      setGameState(result.state);
+      
+      // Don't update lastActionHistoryLength here - let useEffect handle it
+
+      if (result.game_over) {
+        setGamePhase('game_over');
+        onGameEnd();
+      } else {
+        // Subscribe to AI turns stream
+        subscribeToAiTurns();
+      }
+    } catch (err) {
+      setError('Failed to challenge');
+      console.error(err);
+      setProcessing(false);
+      setGamePhase('bidding');
+    }
+  };
+
+  const handleBelieve = async () => {
+    if (!gameState || processing) return;
+
+    try {
+      setProcessing(true);
+      setGamePhase('reveal');
+      const result = await gamesApi.makeAction(gameId, 1); // 1 = believe
+      setGameState(result.state);
+      
+      // Don't update lastActionHistoryLength here - let useEffect handle it
+
+      if (result.game_over) {
+        setGamePhase('game_over');
+        onGameEnd();
+      } else {
+        // Subscribe to AI turns stream
+        subscribeToAiTurns();
+      }
+    } catch (err) {
+      setError('Failed to call believe');
+      console.error(err);
+      setProcessing(false);
+      setGamePhase('bidding');
+    }
+  };
+
 
   if (loading) {
     return (
@@ -358,10 +357,35 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   // Calculate total dice in play
   const totalDiceInPlay = gameState.player_dice_count.reduce((sum, count) => sum + count, 0);
   
-  // Find last bidder from bid history
-  const lastBidderId = gameState.bid_history.length > 0 
-    ? gameState.bid_history[gameState.bid_history.length - 1][0]
-    : null;
+  // Find last bidder from extended_action_history or bid_history
+  let lastBidderId: number | null = null;
+
+  // First, try to use last_bid_player_id if available (most reliable)
+  if (gameState.current_bid && gameState.last_bid_player_id !== undefined && gameState.last_bid_player_id !== null) {
+    lastBidderId = gameState.last_bid_player_id;
+  }
+  // Try to find from extended_action_history
+  else if (gameState.current_bid && gameState.extended_action_history) {
+    for (let i = gameState.extended_action_history.length - 1; i >= 0; i--) {
+      const entry = gameState.extended_action_history[i];
+      if (entry.action_type === 'bid' && 
+          entry.action_data?.quantity === gameState.current_bid[0] &&
+          entry.action_data?.value === gameState.current_bid[1]) {
+        lastBidderId = entry.player_id;
+        break;
+      }
+    }
+  }
+
+  // Fallback to bid_history if extended_action_history didn't work
+  if (lastBidderId === null && gameState.bid_history.length > 0 && gameState.current_bid) {
+    const lastBidInHistory = gameState.bid_history[gameState.bid_history.length - 1];
+    if (lastBidInHistory && lastBidInHistory.length >= 3 &&
+        lastBidInHistory[1] === gameState.current_bid[0] && 
+        lastBidInHistory[2] === gameState.current_bid[1]) {
+      lastBidderId = lastBidInHistory[0];
+    }
+  }
 
   // Arrange players: human player at bottom
   const displayPlayers = [];
@@ -379,22 +403,13 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         <p className="text-gray-400 text-lg">Last player with dice wins!</p>
       </div>
 
-      {gameState.game_over && (
-        <div className={`w-full max-w-7xl mb-6 p-4 rounded-lg ${
-          gameState.winner === 0 ? 'bg-green-600' : 'bg-red-600'
-        } text-white text-center text-xl font-bold`}>
-          {gameState.winner === 0
-            ? '🎉 You Won! 🎉'
-            : `Game Over! ${PLAYER_NAMES[gameState.winner] || `Player ${gameState.winner}`} won.`}
-        </div>
-      )}
 
       <div className="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-2 lg:gap-8 lg:items-end z-10">
         {/* Player List Column */}
         <div className="w-full flex flex-col justify-start space-y-4">
           {displayPlayers.map((playerId) => (
             <Player
-              ref={el => { playerRefs.current[playerId] = el; }}
+              ref={setPlayerRef(playerId)}
               key={playerId}
               playerId={playerId}
               playerName={PLAYER_NAMES[playerId] || `Player ${playerId}`}
@@ -446,14 +461,16 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
               </p>
             </div>
           )}
+        </div>
+      </div>
 
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <GameHistory
-              bidHistory={gameState.bid_history}
-              currentBid={gameState.current_bid}
-              extendedActionHistory={gameState.extended_action_history}
-            />
-          </div>
+      <div className="w-full max-w-7xl mt-4 z-10">
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <GameHistory
+            bidHistory={gameState.bid_history}
+            currentBid={gameState.current_bid}
+            extendedActionHistory={gameState.extended_action_history}
+          />
         </div>
       </div>
 
@@ -467,6 +484,42 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
       >
         {modalContent?.body}
       </Modal>
+
+      <DiceRevealModal
+        isOpen={!!revealModalEntry}
+        onClose={async () => {
+          setRevealModalEntry(null);
+          
+          // If game is awaiting reveal confirmation, continue to next round
+          if (gameState?.awaiting_reveal_confirmation) {
+            try {
+              const result = await gamesApi.continueRound(gameId);
+              setGameState(result.state);
+              setGamePhase('bidding');
+              
+              // If it's AI's turn, subscribe to AI turns
+              if (result.state.current_player !== 0 && !result.state.game_over) {
+                subscribeToAiTurns();
+              }
+            } catch (err) {
+              console.error('Failed to continue round:', err);
+              setError('Failed to continue to next round');
+              // Fallback: just update phase
+              setGamePhase('bidding');
+            }
+          } else {
+            setGamePhase('bidding');
+          }
+        }}
+        actionEntry={revealModalEntry}
+        isSpecialRound={gameState?.palifico_active?.some(p => p) || false}
+      />
+
+      <GameOverModal
+        isOpen={gameState?.game_over || false}
+        onClose={onGameEnd}
+        gameState={gameState}
+      />
     </div>
   );
 };

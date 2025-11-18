@@ -31,6 +31,7 @@ export interface ActionConsequences {
   bidder_id: number | null;
   error_msg: string | null;
   player_dice_count_after: number[];
+  all_player_dice?: number[][]; // All player dice values during reveal (challenge/believe only)
 }
 
 export interface ExtendedActionHistoryEntry {
@@ -57,11 +58,14 @@ export interface GameState {
   extended_action_history?: ExtendedActionHistoryEntry[];
   palifico_active: boolean[];
   believe_called: boolean;
+  last_bid_player_id?: number | null;
   player_dice: {
     bid_history: number[][];
     static_info: number[];
+    dice_values?: number[];
   };
   public_info: any;
+  awaiting_reveal_confirmation?: boolean; // Flag indicating if waiting for user to continue after reveal
 }
 
 export interface CreateGameRequest {
@@ -191,6 +195,13 @@ export const gamesApi = {
 
   list: async (filters?: { finished?: boolean; limit?: number }): Promise<any[]> => {
     const response = await api.get('/games', { params: filters });
+    return response.data;
+  },
+
+  continueRound: async (gameId: string): Promise<{ success: boolean; state: GameState }> => {
+    const response = await api.post<{ success: boolean; state: GameState }>(
+      `/games/${gameId}/continue-round`
+    );
     return response.data;
   },
 

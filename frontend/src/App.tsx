@@ -2,13 +2,17 @@ import React, { useState } from 'react';
 import { ModelSelector } from './components/ModelSelector';
 import { GameBoard } from './components/GameBoard';
 import { Statistics } from './components/Statistics';
+import { ToastProvider, useToastContext } from './contexts/ToastContext';
 import { gamesApi } from './services/api';
+import { HelpModal } from './components/HelpModal';
 
 type View = 'select' | 'game' | 'statistics';
 
-function App() {
+function AppContent() {
   const [currentView, setCurrentView] = useState<View>('select');
   const [currentGameId, setCurrentGameId] = useState<string | null>(null);
+  const [showHelpModal, setShowHelpModal] = useState(false);
+  const { showToast } = useToastContext();
 
   const handleStartGame = async (modelPaths: string[]) => {
     try {
@@ -17,7 +21,7 @@ function App() {
       setCurrentView('game');
     } catch (error) {
       console.error('Failed to start game:', error);
-      alert('Failed to start game. Please try again.');
+      showToast('Failed to start game. Please try again.', 'error');
     }
   };
 
@@ -51,6 +55,13 @@ function App() {
           >
             Statistics
           </button>
+          <button
+            onClick={() => setShowHelpModal(true)}
+            className="px-4 py-2 rounded-lg transition-colors bg-gray-700 hover:bg-gray-600 text-white font-semibold text-xl"
+            title="Помощь"
+          >
+            ?
+          </button>
         </div>
       </nav>
 
@@ -61,7 +72,16 @@ function App() {
         )}
         {currentView === 'statistics' && <Statistics key="statistics" />}
       </main>
+      {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} />}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ToastProvider>
+      <AppContent />
+    </ToastProvider>
   );
 }
 
