@@ -94,7 +94,7 @@ export const Statistics: React.FC = () => {
       <h2 className="text-3xl font-bold text-white mb-6">Statistics</h2>
 
       {playerStats && (
-        <div className="mb-8 border border-gray-600 p-5 rounded-lg bg-gray-700/50">
+        <div className="mb-8 p-5 rounded-lg bg-gray-700/50">
           <h3 className="text-xl font-semibold text-white mb-4">Your Statistics</h3>
           <Bar
             key={`player-stats-chart-${chartKey}`}
@@ -136,16 +136,16 @@ export const Statistics: React.FC = () => {
       )}
 
       {modelStats && Object.keys(modelStats).length > 0 && (
-        <div className="mb-8 border border-gray-600 p-5 rounded-lg bg-gray-700/50">
+        <div className="mb-8 p-5 rounded-lg bg-gray-700/50">
           <h3 className="text-xl font-semibold text-white mb-4">Model Statistics</h3>
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
+            <table className="w-full">
               <thead>
                 <tr>
-                  <th className="p-2.5 text-left border-b-2 border-gray-500 text-white">Model</th>
-                  <th className="p-2.5 text-left border-b-2 border-gray-500 text-white">Games</th>
-                  <th className="p-2.5 text-left border-b-2 border-gray-500 text-white">Wins</th>
-                  <th className="p-2.5 text-left border-b-2 border-gray-500 text-white">Winrate</th>
+                  <th className="p-2.5 text-left text-white">Model</th>
+                  <th className="p-2.5 text-left text-white">Games</th>
+                  <th className="p-2.5 text-left text-white">Wins</th>
+                  <th className="p-2.5 text-left text-white">Winrate</th>
                 </tr>
               </thead>
               <tbody>
@@ -164,17 +164,17 @@ export const Statistics: React.FC = () => {
       )}
 
       {games.length > 0 && (
-        <div className="mb-8 border border-gray-600 p-5 rounded-lg bg-gray-700/50">
+        <div className="mb-8 p-5 rounded-lg bg-gray-700/50">
           <h3 className="text-xl font-semibold text-white mb-4">Recent Games</h3>
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
+            <table className="w-full">
               <thead>
                 <tr>
-                  <th className="p-2.5 text-left border-b-2 border-gray-500 text-white">Created</th>
-                  <th className="p-2.5 text-left border-b-2 border-gray-500 text-white">Finished</th>
-                  <th className="p-2.5 text-left border-b-2 border-gray-500 text-white">Winner</th>
-                  <th className="p-2.5 text-left border-b-2 border-gray-500 text-white">Status</th>
-                  <th className="p-2.5 text-left border-b-2 border-gray-500 text-white">Actions</th>
+                  <th className="p-2.5 text-left text-white">Created</th>
+                  <th className="p-2.5 text-left text-white">Finished</th>
+                  <th className="p-2.5 text-left text-white">Winner</th>
+                  <th className="p-2.5 text-left text-white">Status</th>
+                  <th className="p-2.5 text-left text-white">Actions</th>
                 </tr>
               </thead>
               <tbody>

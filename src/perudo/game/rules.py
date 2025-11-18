@@ -253,7 +253,10 @@ class PerudoRules:
             if game_state.special_round_active:
                 # First bid in special round: quantity 1, any value (including 1)
                 for v in range(1, game_state.total_dice_values + 1):
-                    actions.append(("bid", 1, v))
+                    # CRITICAL: Use is_valid_bid to ensure action is truly valid
+                    is_valid, _ = PerudoRules.is_valid_bid(game_state, player_id, 1, v)
+                    if is_valid:
+                        actions.append(("bid", 1, v))
             else:
                 # First bid - can be any except value 1
                 # Quantity cannot exceed total dice in game
@@ -261,7 +264,10 @@ class PerudoRules:
                 max_quantity = min(100, total_dice_in_game)  # Limit by total dice in game
                 for q in range(min_quantity, max_quantity + 1):
                     for v in range(2, game_state.total_dice_values + 1):  # Skip value 1 for first bid
-                        actions.append(("bid", q, v))
+                        # CRITICAL: Use is_valid_bid to ensure action is truly valid
+                        is_valid, _ = PerudoRules.is_valid_bid(game_state, player_id, q, v)
+                        if is_valid:
+                            actions.append(("bid", q, v))
         else:
             # Subsequent bids must be higher
             # Quantity cannot exceed total dice in game
@@ -271,13 +277,10 @@ class PerudoRules:
             max_quantity = min(100, total_dice_in_game)  # Limit by total dice in game
             for q in range(1, max_quantity + 1):
                 for v in range(1, game_state.total_dice_values + 1):
-                    # In special round, value cannot change
-                    if game_state.special_round_active and v != prev_value:
-                        continue
-                    # In Palifico, player cannot change value
-                    if game_state.palifico_active[player_id] and v != prev_value:
-                        continue
-                    if game_state._is_bid_higher(q, v, prev_quantity, prev_value):
+                    # CRITICAL: Use is_valid_bid to ensure action is truly valid
+                    # This catches all edge cases (special_round, palifico, quantity limits, etc.)
+                    is_valid, _ = PerudoRules.is_valid_bid(game_state, player_id, q, v)
+                    if is_valid:
                         actions.append(("bid", q, v))
 
         return actions

@@ -1480,43 +1480,28 @@ class PerudoMultiAgentVecEnv(VecEnv):
             return np.ones(self.action_space.n, dtype=bool)
         
         # Ensure at least one action is valid
+        # CRITICAL: Do NOT enable invalid actions - this causes high invalid_action_count
+        # If all actions are masked, it means the game state is invalid or there's a bug
+        # Only enable challenge and believe as emergency fallback if absolutely necessary
         num_valid = action_mask.sum()
         if num_valid < 1:
             logger = logging.getLogger(__name__)
             logger.warning(
                 f"All actions masked for env {env_idx}. "
-                f"Enabling challenge and believe as fallback."
+                f"This indicates a bug - game state may be invalid. "
+                f"Enabling challenge and believe as emergency fallback only."
             )
+            # Only enable challenge and believe as emergency fallback
+            # Do NOT enable bid actions without validation - this causes invalid actions
             action_mask[0] = True  # challenge
             if self.action_space.n > 1:
                 action_mask[1] = True  # believe
             num_valid = action_mask.sum()
         
-        # Ensure at least 5 valid actions for numerical stability
-        if num_valid < 5:
-            # Always enable challenge and believe
-            action_mask[0] = True
-            if self.action_space.n > 1:
-                action_mask[1] = True
-            
-            # Recalculate after adding challenge and believe
-            num_valid = action_mask.sum()
-            
-            # Enable more bid actions if needed
-            if num_valid < 5:
-                from ..utils.helpers import bid_to_action
-                min_bid_actions = []
-                for value in range(1, 7):
-                    min_bid_actions.append(bid_to_action(1, value, self.max_quantity))
-                for value in range(1, 4):
-                    min_bid_actions.append(bid_to_action(2, value, self.max_quantity))
-                
-                for bid_action in min_bid_actions:
-                    if bid_action < self.action_space.n and not action_mask[bid_action]:
-                        action_mask[bid_action] = True
-                        num_valid += 1
-                        if num_valid >= 5:
-                            break
+        # CRITICAL: Removed logic that enables bid actions without validation
+        # This was causing invalid actions to be marked as valid, leading to high invalid_action_count
+        # If there are fewer than 5 valid actions, that's fine - the mask should reflect reality
+        # MaskablePPO can handle masks with any number of valid actions (even just 1-2)
         
         return action_mask.astype(bool)
 

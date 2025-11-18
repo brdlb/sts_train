@@ -28,7 +28,7 @@ const Dice: React.FC<DiceProps> = ({
   gamePhase,
   dotColor = 'bg-white',
   starColor = 'text-white',
-  noBorder = false,
+  noBorder = true,
   borderColor = 'border-gray-400',
   dotSizeClass = 'w-2 h-2',
   starSizeClass = 'text-3xl',

@@ -451,11 +451,14 @@ def create_action_mask(
         mask = mask.astype(bool)
     
     # CRITICAL: Double-check that at least one action is valid after all processing
+    # This should never happen if get_available_actions works correctly
     if not mask.any():
         logger = logging.getLogger(__name__)
-        logger.warning(
+        logger.error(
             f"CRITICAL: All actions still masked after fallback in create_action_mask. "
-            f"Enabling all actions as emergency fallback."
+            f"This indicates a serious bug - game state may be invalid. "
+            f"Available actions from get_available_actions: {available_actions}. "
+            f"Enabling all actions as emergency fallback (this will cause invalid actions)."
         )
         mask = np.ones(action_space_size, dtype=bool)
     

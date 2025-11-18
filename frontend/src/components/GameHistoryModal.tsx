@@ -84,7 +84,7 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
               <strong>Игроков:</strong> {game.num_players} • <strong>Ходов:</strong> {actions.length}
             </div>
           </div>
-          <div className="mt-4 pt-4 border-t border-gray-300">
+          <div className="mt-4 pt-4">
             <strong>Игроки:</strong>
             <div className="flex flex-wrap gap-2.5 mt-2">
               {players
@@ -103,7 +103,7 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto border border-gray-300 rounded-lg p-4">
+        <div className="flex-1 overflow-y-auto rounded-lg p-4">
           <h3 className="mt-0 text-xl font-semibold text-gray-800 mb-4">Ходы игры</h3>
           {actions.length === 0 ? (
             <div className="text-gray-500 italic">Нет ходов</div>
@@ -123,7 +123,7 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
                 return (
                   <div
                     key={action.id}
-                    className={`p-3 border-b border-gray-200 ${backgroundColor} mb-1 rounded`}
+                    className={`p-3 ${backgroundColor} mb-1 rounded`}
                   >
                     <div className="font-bold mb-1 text-gray-800">
                       {actionInfo.description}

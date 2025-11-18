@@ -197,7 +197,6 @@ class SelfPlayTraining:
         max_history_length = getattr(self.config.training, 'transformer_history_length', self.config.game.history_length)
         
         # Create vectorized environment
-        debug_moves = getattr(self.config.training, 'debug_moves', False)
         collect_trajectories = getattr(self.config.training, 'collect_trajectories', False)
         vec_env_raw = PerudoMultiAgentVecEnv(
             num_envs=self.num_envs,
@@ -212,7 +211,6 @@ class SelfPlayTraining:
             min_players=self.config.game.min_players,
             max_players=self.config.game.max_players,
             reward_config=self.config.reward,
-            debug_moves=debug_moves,
             rule_based_pool=self.rule_based_pool,
             training_mode=self.training_mode,
             mixed_mode_ratio=self.mixed_mode_ratio,
@@ -263,16 +261,16 @@ class SelfPlayTraining:
                 self.model.tensorboard_log = os.path.abspath(self.config.training.log_dir)
                 
                 # Update learning rate schedule for continued training
-                # Analysis: LR was decaying too fast, adjusted to maintain higher LR throughout training
-                # Final LR is 70% of initial (slower decay for better learning)
+                # Analysis: More aggressive decay for better stability in later training
+                # Final LR is 30% of initial (more aggressive decay for stability)
                 initial_lr = self.config.training.learning_rate
-                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.7)
+                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.3)
                 self.model.learning_rate = lr_schedule
-                final_lr = initial_lr * 0.7
+                final_lr = initial_lr * 0.3
                 
                 logger.info(f"Successfully loaded model from {latest_model_path}")
                 logger.info(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-                logger.info(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 70% of initial)")
+                logger.info(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
                 
                 # Get current timesteps from model (SB3 saves this in the model)
                 self.initial_timesteps = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else 0
@@ -336,12 +334,12 @@ class SelfPlayTraining:
             else:
                 policy_kwargs = self.config.training.policy_kwargs
             
-            # Create learning rate schedule: linear decay with slower rate
-            # Analysis: LR was decaying too fast (to ~0), adjusted to maintain higher LR throughout training
-            # Final LR is 70% of initial (slower decay for better learning throughout training)
+            # Create learning rate schedule: linear decay with more aggressive rate
+            # Analysis: More aggressive decay for better stability in later training
+            # Final LR is 30% of initial (more aggressive decay for stability)
             initial_lr = self.config.training.learning_rate
-            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.7)
-            final_lr = initial_lr * 0.7
+            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.3)
+            final_lr = initial_lr * 0.3
             
             self.model = MaskablePPO(
                 policy=self.config.training.policy,
@@ -363,7 +361,7 @@ class SelfPlayTraining:
             )
             
             logger.info(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-            logger.info(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 50% of initial)")
+            logger.info(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
             
             # For new models, initial_timesteps is 0
             self.initial_timesteps = 0

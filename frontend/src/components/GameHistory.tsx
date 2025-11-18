@@ -60,8 +60,8 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
   const playerNames = ['You (Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
 
   return (
-    <div className="w-full h-full bg-gray-900/80 rounded-lg p-4 shadow-lg flex flex-col border border-gray-700">
-      <h3 className="text-xl font-semibold text-yellow-300 border-b border-yellow-300/30 pb-2 mb-2 flex-shrink-0">Action History</h3>
+    <div className="w-full h-full bg-gray-900/80 rounded-lg p-4 shadow-lg flex flex-col">
+      <h3 className="text-xl font-semibold text-yellow-300 pb-2 mb-2 flex-shrink-0">Action History</h3>
       <div className="flex-grow overflow-y-auto pr-2">
         {extendedActionHistory && extendedActionHistory.length > 0 ? (
           <div className="space-y-2">
@@ -91,7 +91,7 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
               return (
                 <div
                   key={uniqueKey}
-                  className={`p-3 rounded-lg ${bgColor} border border-gray-700/50 transition-colors`}
+                  className={`p-3 rounded-lg ${bgColor} transition-colors`}
                 >
                   <div className="font-semibold text-white mb-1">
                     {actionDescription}
@@ -122,7 +122,7 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
               <div className="text-gray-400 italic">No actions yet</div>
             )}
             {currentBid && (
-              <div className="p-2 rounded bg-blue-900/30 border border-blue-700/50 font-bold text-blue-300">
+              <div className="p-2 rounded bg-blue-900/30 font-bold text-blue-300">
                 <strong>Current Bid:</strong> {currentBid[0]}x{currentBid[1]}
               </div>
             )}
@@ -131,7 +131,7 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
               return (
                 <div
                   key={`${playerId}-${quantity}-${value}-${index}`}
-                  className={`p-2 rounded ${index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50'} border border-gray-700/50`}
+                  className={`p-2 rounded ${index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50'}`}
                 >
                   <strong className="text-white">{playerNames[playerId] || `Player ${playerId}`}:</strong> 
                   <span className="text-gray-300 ml-2">{quantity}x{value}</span>
