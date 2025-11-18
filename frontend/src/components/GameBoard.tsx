@@ -129,9 +129,15 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     if (!isMountedRef.current) return;
     
     loadGameState();
-    // Poll for game state updates (only when not processing AI turns)
+    // Poll for game state updates (only when not processing AI turns and not human's turn)
     const interval = setInterval(() => {
-      if (isMountedRef.current && !gameState?.game_over && !processing && !eventSourceRef.current) {
+      if (
+        isMountedRef.current && 
+        !gameState?.game_over && 
+        !processing && 
+        !eventSourceRef.current &&
+        gameState?.current_player !== 0  // Don't poll during human's turn
+      ) {
         loadGameState();
       }
     }, 2000); // Poll every 2 seconds
@@ -144,7 +150,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         eventSourceRef.current = null;
       }
     };
-  }, [gameId, loadGameState, gameState?.game_over, processing]);
+  }, [gameId, loadGameState, gameState?.game_over, processing, gameState?.current_player]);
 
   // Check for new challenge/believe results
   useEffect(() => {
