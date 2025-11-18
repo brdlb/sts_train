@@ -209,7 +209,7 @@ const BidControls: React.FC<BidControlsProps> = ({
               onClick={handleQuantityReset}
               className={`font-mono font-bold leading-none cursor-pointer transition-colors ${
                 isAboveMinimal ? 'text-red-500' : 'text-white'
-              } text-8xl md:text-9xl`}
+              } text-6xl md:text-9xl`}
             >
               {quantity}
             </span>
@@ -217,7 +217,7 @@ const BidControls: React.FC<BidControlsProps> = ({
               onClick={handleQuantityReset}
               className={`font-mono font-light leading-none -ml-2 cursor-pointer transition-colors ${
                 isAboveMinimal ? 'text-red-500' : 'text-white'
-              } text-7xl md:text-8xl self-baseline`}
+              } text-2xl md:text-8xl self-baseline`}
             >
               X
             </span>
