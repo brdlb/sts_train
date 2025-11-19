@@ -181,8 +181,8 @@ class SelfPlayTraining:
         if self.training_mode in ('selfplay', 'mixed'):
             self.opponent_pool = OpponentPool(
                 pool_dir=pool_dir,
-                max_pool_size=20,
-                min_pool_size=10,
+                max_pool_size=30,
+                min_pool_size=20,
                 keep_best=3,
                 snapshot_freq=50000,
                 opponent_device=opponent_device,
@@ -264,9 +264,9 @@ class SelfPlayTraining:
                 # Analysis: More aggressive decay for better stability in later training
                 # Final LR is 30% of initial (more aggressive decay for stability)
                 initial_lr = self.config.training.learning_rate
-                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.3)
+                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.2)
                 self.model.learning_rate = lr_schedule
-                final_lr = initial_lr * 0.3
+                final_lr = initial_lr * 0.4
                 
                 logger.info(f"Successfully loaded model from {latest_model_path}")
                 logger.info(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
