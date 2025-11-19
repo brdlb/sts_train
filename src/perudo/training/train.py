@@ -327,9 +327,9 @@ class SelfPlayTraining:
                         dropout=getattr(self.config.training, 'transformer_dropout', 0.1),
                     ),
                     # Enhanced network architectures for policy and value networks
-                    # Value network receives 128-dim features, needs stronger architecture
+                    # Value network receives 256-dim features, needs stronger architecture
                     # Format: list with dict specifying separate architectures for pi and vf
-                    net_arch=[dict(pi=[96, 64], vf=[128, 64])],
+                    net_arch=[dict(pi=[256, 192, 128, 96], vf=[256, 192, 128, 96])],
                 )
             else:
                 policy_kwargs = self.config.training.policy_kwargs

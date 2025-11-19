@@ -87,13 +87,13 @@ class TrainingConfig:
     entropy_adjustment_rate: float = 0.02
     entropy_max_coef: float = 0.15
     
-    transformer_features_dim: int = 128
-    transformer_num_layers: int = 1
-    transformer_num_heads: int = 4
-    transformer_embed_dim: int = 96
-    transformer_dim_feedforward: int = 384
-    transformer_history_length: int = 12
-    transformer_dropout: float = 0.1
+    transformer_features_dim: int = 256
+    transformer_num_layers: int = 3
+    transformer_num_heads: int = 8
+    transformer_embed_dim: int = 256
+    transformer_dim_feedforward: int = 1024
+    transformer_history_length: int = 24
+    transformer_dropout: float = 0.15
 
     num_envs: int = 4
     total_timesteps: int = 6_000_000
