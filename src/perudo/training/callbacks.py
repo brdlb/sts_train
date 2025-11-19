@@ -319,7 +319,7 @@ class SelfPlayTrainingCallback(BaseCallback):
                 )
                 if self.verbose > 0:
                     logger.info(f"Saved snapshot after training cycle {self.training_cycle_count} (step {snapshot_step:,})")
-            self._pending_snapshot = False
+                self._pending_snapshot = False  # Reset flag only after successful save
         
         # Collect episode_info from all env infos (SB3 passes them in self.locals["infos"])
         infos = self.locals.get("infos", [])
