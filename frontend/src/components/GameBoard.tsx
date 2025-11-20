@@ -95,9 +95,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
             setProcessing(false);
             setGamePhase('game_over');
             eventSourceRef.current = null;
-            if (data.winner !== undefined) {
-              onGameEnd();
-            }
+            // Don't call onGameEnd() here - let the modal show first
+            // onGameEnd will be called when user closes the GameOverModal
           }
         } else if (data.type === 'done') {
           if (data.state) {
@@ -157,7 +156,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
       if (state.game_over) {
         setGamePhase('game_over');
-        onGameEnd();
+        // Don't call onGameEnd() here - let the modal show first
+        // onGameEnd will be called when user closes the GameOverModal
       } else if (state.current_player === 0) {
         setProcessing(false);
       } else if (state.current_player !== 0 && !eventSourceRef.current) {
