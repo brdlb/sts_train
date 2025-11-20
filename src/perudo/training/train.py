@@ -261,16 +261,16 @@ class SelfPlayTraining:
                 self.model.tensorboard_log = os.path.abspath(self.config.training.log_dir)
                 
                 # Update learning rate schedule for continued training
-                # Analysis: More aggressive decay for better stability in later training
-                # Final LR is 30% of initial (more aggressive decay for stability)
+                # Analysis: Gentler decay to maintain learning capacity while ensuring stability
+                # Final LR is 50% of initial (gentler decay for better exploration)
                 initial_lr = self.config.training.learning_rate
-                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.2)
+                lr_schedule = linear_schedule(initial_lr, decay_ratio=0.5)
                 self.model.learning_rate = lr_schedule
-                final_lr = initial_lr * 0.4
+                final_lr = initial_lr * 0.5
                 
                 logger.info(f"Successfully loaded model from {latest_model_path}")
                 logger.info(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-                logger.info(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
+                logger.info(f"Learning rate schedule updated: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 50% of initial)")
                 
                 # Get current timesteps from model (SB3 saves this in the model)
                 self.initial_timesteps = self.model.num_timesteps if hasattr(self.model, 'num_timesteps') else 0
@@ -334,12 +334,12 @@ class SelfPlayTraining:
             else:
                 policy_kwargs = self.config.training.policy_kwargs
             
-            # Create learning rate schedule: linear decay with more aggressive rate
-            # Analysis: More aggressive decay for better stability in later training
-            # Final LR is 30% of initial (more aggressive decay for stability)
+            # Create learning rate schedule: linear decay with gentler rate
+            # Analysis: Gentler decay to maintain learning capacity while ensuring stability
+            # Final LR is 50% of initial (gentler decay for better exploration)
             initial_lr = self.config.training.learning_rate
-            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.3)
-            final_lr = initial_lr * 0.3
+            lr_schedule = linear_schedule(initial_lr, decay_ratio=0.5)
+            final_lr = initial_lr * 0.5
             
             self.model = MaskablePPO(
                 policy=self.config.training.policy,
@@ -361,7 +361,7 @@ class SelfPlayTraining:
             )
             
             logger.info(f"TensorBoard logging enabled: {self.model.tensorboard_log}")
-            logger.info(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 30% of initial)")
+            logger.info(f"Learning rate schedule: {initial_lr:.2e} -> {final_lr:.2e} (linear decay, 50% of initial)")
             
             # For new models, initial_timesteps is 0
             self.initial_timesteps = 0

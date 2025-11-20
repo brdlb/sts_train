@@ -21,6 +21,35 @@ pip install -r requirements.txt
 
 ### Frontend
 
+**Требования:**
+- Node.js версии 20.19+ или 22.12+ (рекомендуется 22 LTS)
+- npm (устанавливается вместе с Node.js)
+
+**Проверка версии Node.js:**
+```bash
+node --version
+```
+
+**Обновление Node.js:**
+
+На Windows:
+1. Скачайте установщик с [nodejs.org](https://nodejs.org/)
+2. Выберите версию 22 LTS (Long Term Support)
+3. Установите, заменив старую версию
+
+Или используйте nvm-windows:
+```bash
+# Установите nvm-windows с https://github.com/coreybutler/nvm-windows
+nvm install 22
+nvm use 22
+```
+
+На Linux/Mac (с nvm):
+```bash
+nvm install 22
+nvm use 22
+```
+
 1. Перейдите в директорию frontend:
 ```bash
 cd frontend
