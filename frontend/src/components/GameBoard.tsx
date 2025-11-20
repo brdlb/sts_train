@@ -128,7 +128,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   const handleGameOver = useCallback((result: ActionResult) => {
     if (result.game_over) {
       setGamePhase('game_over');
-      onGameEnd();
+      // onGameEnd(); // Removed to allow modal to show
     }
   }, [onGameEnd]);
 
