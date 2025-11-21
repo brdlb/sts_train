@@ -89,7 +89,7 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
                   <div className="flex items-center space-x-3">
                     <div className={`w-4 h-4 rounded-full ${playerColor}`}></div>
                     <span className="text-lg font-semibold text-white">
-                      {playerName} {isHuman && '(Вы)'}
+                      {playerName}
                     </span>
                     {isWinner && (
                       <span className="text-yellow-400 font-bold">👑 Победитель</span>
@@ -159,7 +159,7 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
                 return (
                   <div key={playerId} className="flex items-center justify-between p-2 bg-gray-600/30 rounded">
                     <span className="text-gray-300">
-                      {playerName} {playerId === 0 && '(Вы)'}:
+                      {playerName}:
                     </span>
                     <div className="flex space-x-4 text-sm">
                       <span className="text-blue-400">Ставок: {playerBids}</span>
