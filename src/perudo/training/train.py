@@ -29,6 +29,7 @@ from .callbacks import (
     SelfPlayTrainingCallback,
     ModelUpdateProgressCallback,
     WinnerTrajectoryCollectorCallback,
+    DateCheckpointCallback,
 )
 from .debug import DebugModeManager, get_debug_mode, set_debug_mode
 from .utils import get_device, linear_schedule, find_latest_model, restore_model_from_opponent_pool
@@ -246,7 +247,7 @@ class SelfPlayTraining:
             logger.info(f"Successfully restored model from opponent pool to: {restored_model_path}")
         
         # Try to find and load the latest saved model
-        latest_model_path = find_latest_model(self.config.training.model_dir)
+        latest_model_path = find_latest_model(self.config.training.model_dir, additional_dirs=[pool_dir])
         
         if latest_model_path and os.path.exists(latest_model_path):
             # Load existing model for continued training
@@ -491,7 +492,7 @@ class SelfPlayTraining:
             logger.info(f"  Trajectories will be saved to: {winner_trajectories_dir}")
         
         # Checkpoint callback
-        checkpoint_callback = CheckpointCallback(
+        checkpoint_callback = DateCheckpointCallback(
             save_freq=self.config.training.save_freq,
             save_path=self.config.training.model_dir,
             name_prefix="perudo_model",
