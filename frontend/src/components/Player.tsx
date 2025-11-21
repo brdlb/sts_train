@@ -17,12 +17,12 @@ interface PlayerProps {
   revealed?: boolean; // Whether dice should be revealed (for all players during reveal phase)
 }
 
-const Player = forwardRef<HTMLDivElement, PlayerProps>(({ 
-  playerId, 
-  playerName, 
-  dice, 
-  diceCount, 
-  isCurrent, 
+const Player = forwardRef<HTMLDivElement, PlayerProps>(({
+  playerId,
+  playerName,
+  dice,
+  diceCount,
+  isCurrent,
   isHuman,
   gamePhase = 'bidding',
   lastBid,
@@ -33,7 +33,7 @@ const Player = forwardRef<HTMLDivElement, PlayerProps>(({
 }, ref) => {
   const isRevealing = gamePhase === 'reveal' || gamePhase === 'round_over';
   const hasLost = diceCount === 0;
-  
+
   // Find player's last bid - prefer extended_action_history if available
   // Only show gray badge if player made a bid but is not the last bidder
   // Also check that the bid doesn't match current_bid (to avoid showing old bids from previous rounds)
@@ -45,48 +45,47 @@ const Player = forwardRef<HTMLDivElement, PlayerProps>(({
       const bid = bidHistory[i];
       if (bid && bid.length >= 3) {
         const [bidPlayerId, bidQuantity, bidValue] = bid;
-        if (bidPlayerId === playerId && 
-            (!lastBid || bidQuantity !== lastBid[0] || bidValue !== lastBid[1])) {
+        if (bidPlayerId === playerId &&
+          (!lastBid || bidQuantity !== lastBid[0] || bidValue !== lastBid[1])) {
           playerLastBidInHistory = bid as [number, number, number];
           break;
         }
       }
     }
   }
-  
+
   // Get player color
   const playerColor = PLAYER_COLORS[playerId % PLAYER_COLORS.length];
-  
+
   // Determine if dice should be shown
   const shouldShowDice = isRevealing || isHuman || revealed;
-  
+
   // Create dice array - use actual dice if available, otherwise create placeholder array
-  const diceToShow = shouldShowDice && dice.length > 0 
-    ? dice 
+  const diceToShow = shouldShowDice && dice.length > 0
+    ? dice
     : Array(diceCount).fill(0); // Placeholder for hidden dice
 
   return (
-    <div 
-      ref={ref} 
-      className={`relative p-4 rounded-lg transition-all duration-300 ${
-        isCurrent ? 'bg-yellow-500/20 ring-2 ring-yellow-400' : 'bg-gray-700/50'
-      } ${hasLost ? 'opacity-40' : ''}`}
+    <div
+      ref={ref}
+      className={`relative p-4 rounded-lg transition-all duration-300 ${isCurrent ? 'bg-yellow-500/20 ring-2 ring-yellow-400' : 'bg-gray-700/50'
+        } ${hasLost ? 'opacity-40' : ''}`}
     >
       <div className="flex items-center space-x-4">
         <div>
           <h3 className="text-2xl font-bold text-white">
-            {playerName} {isHuman && '(You)'}
+            {playerName}
           </h3>
           {hasLost && <p className="text-lg text-red-400 font-semibold">Eliminated</p>}
         </div>
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
         {diceToShow.map((d, i) => (
-          <Dice 
-            key={i} 
-            value={d as 1 | 2 | 3 | 4 | 5 | 6} 
-            size={10} 
-            revealed={shouldShowDice && d > 0} 
+          <Dice
+            key={i}
+            value={d as 1 | 2 | 3 | 4 | 5 | 6}
+            size={10}
+            revealed={shouldShowDice && d > 0}
             color={playerColor}
             bidForHighlighting={lastBid}
             isSpecialRound={isSpecialRound}
@@ -95,7 +94,7 @@ const Player = forwardRef<HTMLDivElement, PlayerProps>(({
         ))}
       </div>
       {isLastBidder && lastBid && lastBid.length >= 2 && lastBid[0] > 0 && lastBid[1] > 0 ? (
-         <div className="absolute -top-2 -right-2 bg-blue-600 text-white pl-3 pr-2 py-2 rounded-full text-4xl font-bold shadow-lg flex items-center">
+        <div className="absolute -top-2 -right-2 bg-blue-600 text-white pl-3 pr-2 py-2 rounded-full text-4xl font-bold shadow-lg flex items-center">
           <span className="mr-0.5">{lastBid[0]}</span>
           <span className="mr-1">x</span>
           <Dice
@@ -111,7 +110,7 @@ const Player = forwardRef<HTMLDivElement, PlayerProps>(({
           />
         </div>
       ) : playerLastBidInHistory && playerLastBidInHistory.length >= 3 && playerLastBidInHistory[1] > 0 && playerLastBidInHistory[2] > 0 ? (
-         <div className="absolute -top-2 -right-2 bg-gray-500 text-white pl-3 pr-2 py-2 rounded-full text-4xl font-bold shadow-lg opacity-60 flex items-center">
+        <div className="absolute -top-2 -right-2 bg-gray-500 text-white pl-3 pr-2 py-2 rounded-full text-4xl font-bold shadow-lg opacity-60 flex items-center">
           <span className="mr-0.5">{playerLastBidInHistory[1]}</span>
           <span className="mr-1">x</span>
           <Dice

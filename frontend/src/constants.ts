@@ -6,5 +6,5 @@ export const PLAYER_COLORS: string[] = [
   'bg-purple-600',
 ];
 
-export const PLAYER_NAMES = ['You (Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
+export const PLAYER_NAMES = ['You (probably Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
 

@@ -106,12 +106,7 @@ def plot_elo_snapshots(
     # Plot snapshot ELOs
     ax.plot(steps, elos, 'o-', linewidth=2, markersize=8, 
              label='Snapshot ELO', color='#4A90E2', alpha=0.8)
-    
-    # Plot current policy ELO as horizontal line
-    if current_policy_elo > 0:
-        ax.axhline(y=current_policy_elo, color='#E24A4A', linestyle='--', 
-                   linewidth=2, label=f'Current Policy ELO: {current_policy_elo:.1f}', 
-                   alpha=0.7)
+
     
     # Calculate and plot average ELO
     if elos:
