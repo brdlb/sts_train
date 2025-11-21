@@ -32,26 +32,24 @@ function AppContent() {
 
   return (
     <div className="h-full flex flex-col bg-gray-800">
-      <nav className="bg-gray-900 text-white px-5 py-4 flex justify-between items-center flex-shrink-0 border-b border-gray-700">
-        <h1 className="m-0 text-2xl font-bold text-orange-400">Perudo Game</h1>
+      <nav className="text-white px-5 py-4 flex justify-between items-center flex-shrink-0">
+        <h1 className="m-0 text-2xl font-bold text-orange-400"></h1>
         <div className="flex gap-4">
           <button
             onClick={() => setCurrentView('select')}
-            className={`px-4 py-2 rounded-lg transition-colors ${
-              currentView === 'select' 
-                ? 'bg-green-600 hover:bg-green-700' 
-                : 'bg-gray-700 hover:bg-gray-600'
-            } text-white font-semibold`}
+            className={`px-4 py-2 rounded-lg transition-colors ${currentView === 'select'
+              ? 'bg-green-600 hover:bg-green-700'
+              : 'bg-gray-700 hover:bg-gray-600'
+              } text-white font-semibold`}
           >
             New Game
           </button>
           <button
             onClick={() => setCurrentView('statistics')}
-            className={`px-4 py-2 rounded-lg transition-colors ${
-              currentView === 'statistics' 
-                ? 'bg-green-600 hover:bg-green-700' 
-                : 'bg-gray-700 hover:bg-gray-600'
-            } text-white font-semibold`}
+            className={`px-4 py-2 rounded-lg transition-colors ${currentView === 'statistics'
+              ? 'bg-green-600 hover:bg-green-700'
+              : 'bg-gray-700 hover:bg-gray-600'
+              } text-white font-semibold`}
           >
             Statistics
           </button>

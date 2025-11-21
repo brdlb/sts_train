@@ -52,7 +52,7 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
 
   return (
     <Modal isOpen={isOpen} title="Игра окончена!" onClose={onClose} maxWidth="2xl" actionLabel="Вернуться в меню">
-      <div className="space-y-6">
+      <div className="space-y-6 max-h-[70vh] overflow-y-auto">
         {/* Winner announcement */}
         <div className={`rounded-lg p-6 text-center ${isHumanWinner ? 'bg-green-600/20 border-2 border-green-500' : 'bg-red-600/20 border-2 border-red-500'
           }`}>
