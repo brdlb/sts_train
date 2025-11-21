@@ -952,13 +952,21 @@ class PerudoMultiAgentVecEnv(VecEnv):
         # Calculate percentage: min(history_length, max_history_length) / max_history_length * 100
         history_usage_percent = min(history_length, max_history_length) / max_history_length * 100.0
         
+        # Determine episode mode: check if any rule-based agents are used
+        # This is needed for all episodes (not just wins) to track statistics
+        has_rule_based_agents = any(
+            self.opponent_agents[env_idx][i] is not None 
+            for i in range(len(self.opponent_agents[env_idx]))
+        )
+        episode_mode = "botplay" if has_rule_based_agents else "selfplay"
+        
         # Print episode summary
         learning_agent_won = winner == learning_agent_id
         win_status = "WIN" if learning_agent_won else "DEFEAT"
 
         if (win_status == "WIN"):
             dice_str = str(list(env.game_state.player_dice_count))
-            print(f"{win_status} | reward: {final_reward:.2f} | stats: bids={bid_count}, challenges={challenge_count}, believe={believe_count}, invalid={invalid_action_count} | dice: {dice_str} | history: {history_length}/{max_history_length} ({history_usage_percent:.1f}%)")
+            print(f"{win_status} | mode: {episode_mode} | reward: {final_reward:.2f} | stats: bids={bid_count}, challenges={challenge_count}, believe={believe_count} | dice: {dice_str}")
             
         # Create episode info dict
         info = {
@@ -979,6 +987,7 @@ class PerudoMultiAgentVecEnv(VecEnv):
             "episode_length": int(episode_length),
             "history_length": history_length,
             "history_usage_percent": history_usage_percent,
+            "episode_mode": episode_mode,  # Add episode mode for tracking botplay/selfplay statistics
         }
         
         return info

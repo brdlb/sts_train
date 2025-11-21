@@ -28,7 +28,7 @@ const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
     const bidderName = (consequences.bidder_id !== null && consequences.bidder_id !== undefined && typeof consequences.bidder_id === 'number')
       ? getPlayerName(consequences.bidder_id)
       : 'другого игрока';
-    
+
     if (consequences.challenge_success === true) {
       return `${playerName} оспорил${bidInfo} ${bidderName}. Ставка была неправильной! ${bidderName} проиграл кубик.`;
     } else if (consequences.challenge_success === false) {
@@ -43,7 +43,7 @@ const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
     const bidderName = (consequences.bidder_id !== null && consequences.bidder_id !== undefined && typeof consequences.bidder_id === 'number')
       ? getPlayerName(consequences.bidder_id)
       : 'другого игрока';
-    
+
     if (consequences.believe_success === true) {
       return `${playerName} поверил${bidInfo} ${bidderName}. Ставка была точной! ${playerName} получил преимущество.`;
     } else if (consequences.believe_success === false) {
@@ -52,12 +52,12 @@ const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
       return `${playerName} поверил${bidInfo} ${bidderName}.`;
     }
   }
-  
+
   return `${playerName}: ${action_type}`;
 };
 
 export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid, extendedActionHistory }) => {
-  const playerNames = ['You (Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
+  const playerNames = ['You (probably Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
 
   return (
     <div className="w-full h-full bg-gray-900/80 rounded-lg p-4 shadow-lg flex flex-col">
@@ -83,56 +83,56 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                 })
                 .slice()
                 .reverse();
-              
+
               return filtered.map((entry, index) => {
-              // Validate entry
-              if (!entry || !entry.consequences) {
-                return null;
-              }
+                // Validate entry
+                if (!entry || !entry.consequences) {
+                  return null;
+                }
 
-              const actionDescription = formatActionDescription(entry);
-              const isHuman = entry.player_id === 0;
-              const bgColor = isHuman 
-                ? (index % 2 === 0 ? 'bg-blue-900/30' : 'bg-blue-800/30')
-                : (index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50');
-              
-              // Determine if there were consequences
-              const hasConsequences = entry.consequences && entry.consequences.dice_lost !== null && entry.consequences.dice_lost > 0;
-              const consequenceColor = (entry.consequences?.challenge_success === true || entry.consequences?.believe_success === true)
-                ? 'text-green-400' // Green for success
-                : (entry.consequences?.challenge_success === false || entry.consequences?.believe_success === false)
-                ? 'text-red-400' // Red for failure
-                : 'text-gray-400'; // Gray for neutral
+                const actionDescription = formatActionDescription(entry);
+                const isHuman = entry.player_id === 0;
+                const bgColor = isHuman
+                  ? (index % 2 === 0 ? 'bg-blue-900/30' : 'bg-blue-800/30')
+                  : (index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50');
 
-              // Use a unique key based on entry data
-              const uniqueKey = `${entry.player_id}-${entry.action_type}-${entry.consequences.bid_quantity || ''}-${entry.consequences.bid_value || ''}-${index}`;
+                // Determine if there were consequences
+                const hasConsequences = entry.consequences && entry.consequences.dice_lost !== null && entry.consequences.dice_lost > 0;
+                const consequenceColor = (entry.consequences?.challenge_success === true || entry.consequences?.believe_success === true)
+                  ? 'text-green-400' // Green for success
+                  : (entry.consequences?.challenge_success === false || entry.consequences?.believe_success === false)
+                    ? 'text-red-400' // Red for failure
+                    : 'text-gray-400'; // Gray for neutral
 
-              return (
-                <div
-                  key={uniqueKey}
-                  className={`p-3 rounded-lg ${bgColor} transition-colors`}
-                >
-                  <div className="font-semibold text-white mb-1">
-                    {actionDescription}
+                // Use a unique key based on entry data
+                const uniqueKey = `${entry.player_id}-${entry.action_type}-${entry.consequences.bid_quantity || ''}-${entry.consequences.bid_value || ''}-${index}`;
+
+                return (
+                  <div
+                    key={uniqueKey}
+                    className={`p-3 rounded-lg ${bgColor} transition-colors`}
+                  >
+                    <div className="font-semibold text-white mb-1">
+                      {actionDescription}
+                    </div>
+                    {hasConsequences && entry.consequences.loser_id !== null && entry.consequences.loser_id !== undefined && typeof entry.consequences.loser_id === 'number' && (
+                      <div className={`text-sm ${consequenceColor} mt-1`}>
+                        {getPlayerName(entry.consequences.loser_id)} lost {entry.consequences.dice_lost} die/dice
+                      </div>
+                    )}
+                    {entry.consequences.actual_count !== null && entry.consequences.actual_count !== undefined && (
+                      <div className="text-xs text-gray-400 mt-1">
+                        Actual count: {entry.consequences.actual_count}
+                      </div>
+                    )}
+                    {entry.consequences.action_valid === false && (
+                      <div className="text-xs text-red-400 mt-1">
+                        Invalid action: {entry.consequences.error_msg || 'Unknown error'}
+                      </div>
+                    )}
                   </div>
-                  {hasConsequences && entry.consequences.loser_id !== null && entry.consequences.loser_id !== undefined && typeof entry.consequences.loser_id === 'number' && (
-                    <div className={`text-sm ${consequenceColor} mt-1`}>
-                      {getPlayerName(entry.consequences.loser_id)} lost {entry.consequences.dice_lost} die/dice
-                    </div>
-                  )}
-                  {entry.consequences.actual_count !== null && entry.consequences.actual_count !== undefined && (
-                    <div className="text-xs text-gray-400 mt-1">
-                      Actual count: {entry.consequences.actual_count}
-                    </div>
-                  )}
-                  {entry.consequences.action_valid === false && (
-                    <div className="text-xs text-red-400 mt-1">
-                      Invalid action: {entry.consequences.error_msg || 'Unknown error'}
-                    </div>
-                  )}
-                </div>
-              );
-            });
+                );
+              });
             })()}
           </div>
         ) : (
@@ -153,7 +153,7 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                   key={`${playerId}-${quantity}-${value}-${index}`}
                   className={`p-2 rounded ${index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50'}`}
                 >
-                  <strong className="text-white">{playerNames[playerId] || `Player ${playerId}`}:</strong> 
+                  <strong className="text-white">{playerNames[playerId] || `Player ${playerId}`}:</strong>
                   <span className="text-gray-300 ml-2">{quantity}x{value}</span>
                 </div>
               );

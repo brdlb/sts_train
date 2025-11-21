@@ -71,29 +71,29 @@ class TrainingConfig:
     device: Optional[str] = None
     opponent_device: Optional[str] = "cuda"
     learning_rate: float = 1.3e-4
-    n_steps: int = 20480
-    batch_size: int = 2560
-    n_epochs: int = 2
+    n_steps: int = 8192
+    batch_size: int = 512
+    n_epochs: int = 4
     gamma: float = 0.99
     gae_lambda: float = 0.98
-    clip_range: float = 0.08
-    ent_coef: float = 0.08
+    clip_range: float = 0.15
+    ent_coef: float = 0.12
     vf_coef: float = 0.25
     max_grad_norm: float = 0.3
     
     adaptive_entropy: bool = True
-    entropy_threshold_low: float = -0.45
-    entropy_threshold_high: float = -0.35
-    entropy_adjustment_rate: float = 0.02
-    entropy_max_coef: float = 0.15
+    entropy_threshold_low: float = -3.4
+    entropy_threshold_high: float = -3.0
+    entropy_adjustment_rate: float = 0.03
+    entropy_max_coef: float = 0.2
     
-    transformer_features_dim: int = 128
-    transformer_num_layers: int = 1
-    transformer_num_heads: int = 4
-    transformer_embed_dim: int = 96
-    transformer_dim_feedforward: int = 384
-    transformer_history_length: int = 12
-    transformer_dropout: float = 0.1
+    transformer_features_dim: int = 256
+    transformer_num_layers: int = 3
+    transformer_num_heads: int = 8
+    transformer_embed_dim: int = 256
+    transformer_dim_feedforward: int = 1024
+    transformer_history_length: int = 24
+    transformer_dropout: float = 0.15
 
     num_envs: int = 4
     total_timesteps: int = 6_000_000
@@ -108,22 +108,18 @@ class TrainingConfig:
     use_rule_based_opponents: bool = True
     training_mode: str = "mixed"
     bot_difficulty_distribution: Dict[str, float] = field(
-        default_factory=lambda: {"EASY": 0.33, "MEDIUM": 0.34, "HARD": 0.33}
+        default_factory=lambda: {"EASY": 0.33, "MEDIUM": 0.33, "HARD": 0.34}
     )  # Distribution of bot difficulty levels
     mixed_mode_ratio: float = 0.7  # Ratio of botplay in mixed mode (0.0-1.0)
-    allowed_bot_personalities: Optional[List[str]] = None #field(
-    
-    
-     #   default_factory=lambda: ["CONSERVATIVE"] )  # List of allowed bot personality keys (e.g., ["CONSERVATIVE"]). If None, all bots are allowed.
+    allowed_bot_personalities: Optional[List[str]] = None # field( default_factory=lambda: ["CONSERVATIVE"] )  
 
     # Trajectory collection
-    collect_trajectories: bool = False  # Enable collection and saving of winner trajectories (for imitation learning)
+    collect_trajectories: bool = False  
     
     # Other
     verbose: int = 1
     seed: Optional[int] = None
-    debug_moves: bool = True  # Enable detailed move logging (forces num_envs=1)
-
+    debug_moves: bool = True 
 
 @dataclass
 class Config:

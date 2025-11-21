@@ -64,3 +64,4 @@ caddy.exe
 Caddyfile
 data/perudo_games.db
 .continue/
+.agent

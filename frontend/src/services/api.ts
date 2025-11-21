@@ -219,14 +219,13 @@ export const gamesApi = {
     }) => void,
     onError?: (error: Event) => void
   ): EventSource => {
-    const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
     const eventSource = new EventSource(`${API_BASE_URL}/games/${gameId}/ai-turns`);
 
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         onTurn(data);
-        
+
         // Close connection when done
         if (data.type === 'done' || data.type === 'error') {
           eventSource.close();

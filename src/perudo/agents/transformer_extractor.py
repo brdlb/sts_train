@@ -16,11 +16,14 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
     Architecture:
     - Embeddings for action_type, bid quantities and values
     - Positional encodings
-    - Transformer encoder for sequence processing
-    - MLP for static information
-    - Combined output features
+    - Multi-layer transformer encoder for deep sequence processing
+    - Attention pooling for aggregating sequence information (focuses on important elements)
+    - Post-transformer normalization for training stability
+    - Enhanced MLP for static information processing (3 layers with GELU activation)
+    - Combined output features from history and static information
     
     Processes action history with action_type (bid/challenge/believe) and encoded_bid.
+    Uses attention pooling instead of simple averaging to better focus on relevant sequence elements.
     """
     
     def __init__(
@@ -88,18 +91,36 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        # MLP for static information (simplified for efficiency)
+        # Attention pooling for aggregating transformer output
+        # Uses learnable query token to attend to all sequence positions
+        self.attention_pool = nn.MultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        # Learnable query token for attention pooling
+        self.aggregation_query = nn.Parameter(torch.randn(1, 1, embed_dim))
+        
+        # Post-transformer normalization
+        self.post_transformer_norm = nn.LayerNorm(embed_dim)
+        
+        # MLP for static information (enhanced for better integration)
         # Get static_info size from observation space
         static_info_size = observation_space['static_info'].shape[0]
         self.static_mlp = nn.Sequential(
-            nn.Linear(static_info_size, embed_dim // 2),  # Direct projection to embed_dim // 2
-            nn.ReLU(),
-            nn.LayerNorm(embed_dim // 2),  # Layer normalization for stability
+            nn.Linear(static_info_size, embed_dim),
+            nn.GELU(),
+            nn.LayerNorm(embed_dim),
+            nn.Linear(embed_dim, embed_dim),
+            nn.GELU(),
+            nn.LayerNorm(embed_dim),
+            nn.Linear(embed_dim, embed_dim),
         )
         
         # Output projection to features_dim
-        # Combined: transformer output (embed_dim) + static features (embed_dim // 2)
-        combined_dim = embed_dim + embed_dim // 2
+        # Combined: transformer output (embed_dim) + static features (embed_dim)
+        combined_dim = embed_dim + embed_dim
         self.output_projection = nn.Linear(combined_dim, features_dim)
         
     def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
@@ -172,28 +193,31 @@ class TransformerFeaturesExtractor(BaseFeaturesExtractor):
             src_key_padding_mask=modified_mask
         )  # (batch_size, max_history_length, embed_dim)
         
-        # Aggregate transformer output: weighted average of valid elements (vectorized)
-        # This is more efficient than taking only the last element and preserves more information
-        # Convert mask: True for padding (to ignore), False for valid positions
-        valid_mask = ~modified_mask  # (batch_size, max_history_length) - True for valid positions
-        # Expand mask to match transformer_output shape
-        valid_mask_expanded = valid_mask.unsqueeze(-1)  # (batch_size, max_history_length, 1)
-        # Mask out padding positions by setting them to zero
-        masked_output = transformer_output * valid_mask_expanded  # (batch_size, max_history_length, embed_dim)
-        # Sum over sequence dimension (only valid positions contribute)
-        summed_output = masked_output.sum(dim=1)  # (batch_size, embed_dim)
-        # Count valid positions per sequence
-        valid_count = valid_mask.sum(dim=1, keepdim=True)  # (batch_size, 1)
-        # Avoid division by zero (should not happen due to modified_mask, but safety check)
-        valid_count = torch.clamp(valid_count, min=1.0)
-        # Compute mean (weighted average)
-        aggregated_history = summed_output / valid_count  # (batch_size, embed_dim)
+        # Aggregate transformer output using attention pooling
+        # This allows the model to focus on the most important elements in the sequence
+        # Expand aggregation query to batch size
+        query = self.aggregation_query.expand(batch_size, -1, -1)  # (batch_size, 1, embed_dim)
+        
+        # Attention pooling: query attends to transformer_output
+        # key_padding_mask: True for positions to ignore (padding)
+        aggregated_history, _ = self.attention_pool(
+            query=query,
+            key=transformer_output,
+            value=transformer_output,
+            key_padding_mask=modified_mask,
+        )  # (batch_size, 1, embed_dim)
+        
+        # Remove sequence dimension
+        aggregated_history = aggregated_history.squeeze(1)  # (batch_size, embed_dim)
+        
+        # Apply post-transformer normalization
+        aggregated_history = self.post_transformer_norm(aggregated_history)  # (batch_size, embed_dim)
         
         # Process static information
-        static_features = self.static_mlp(static_info)  # (batch_size, embed_dim // 2)
+        static_features = self.static_mlp(static_info)  # (batch_size, embed_dim)
         
         # Combine transformer output and static features
-        combined_features = torch.cat([aggregated_history, static_features], dim=-1)  # (batch_size, embed_dim + embed_dim // 2)
+        combined_features = torch.cat([aggregated_history, static_features], dim=-1)  # (batch_size, embed_dim + embed_dim)
         
         # Project to final feature dimension
         output_features = self.output_projection(combined_features)  # (batch_size, features_dim)

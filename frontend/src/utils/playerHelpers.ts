@@ -8,8 +8,9 @@
  * @returns Player name string
  */
 export const getPlayerName = (playerId: number): string => {
-  if (playerId === 0) return 'You (Human)';
+  if (playerId === 0) return 'You (probably Human)';
   return `AI Player ${playerId}`;
 };
+
 
 

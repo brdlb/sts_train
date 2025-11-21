@@ -20,7 +20,7 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
 
   const winner = gameState.winner;
   const isHumanWinner = winner === 0;
-  const winnerName = winner !== null 
+  const winnerName = winner !== null
     ? (PLAYER_NAMES[winner] || `Player ${winner}`)
     : 'Unknown';
 
@@ -51,18 +51,16 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
   const totalActions = totalBids + totalChallenges + totalBelieves;
 
   return (
-    <Modal isOpen={isOpen} title="Игра окончена!" onClose={onClose} maxWidth="2xl">
-      <div className="space-y-6">
+    <Modal isOpen={isOpen} title="Игра окончена!" onClose={onClose} maxWidth="2xl" actionLabel="Вернуться в меню">
+      <div className="space-y-6 max-h-[70vh] overflow-y-auto">
         {/* Winner announcement */}
-        <div className={`rounded-lg p-6 text-center ${
-          isHumanWinner ? 'bg-green-600/20 border-2 border-green-500' : 'bg-red-600/20 border-2 border-red-500'
-        }`}>
+        <div className={`rounded-lg p-6 text-center ${isHumanWinner ? 'bg-green-600/20 border-2 border-green-500' : 'bg-red-600/20 border-2 border-red-500'
+          }`}>
           <div className="text-4xl mb-2">
             {isHumanWinner ? '🎉' : '😔'}
           </div>
-          <h2 className={`text-3xl font-bold mb-2 ${
-            isHumanWinner ? 'text-green-400' : 'text-red-400'
-          }`}>
+          <h2 className={`text-3xl font-bold mb-2 ${isHumanWinner ? 'text-green-400' : 'text-red-400'
+            }`}>
             {isHumanWinner ? 'Вы победили!' : `Победитель: ${winnerName}`}
           </h2>
           {!isHumanWinner && (
@@ -81,18 +79,17 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
               const playerColor = PLAYER_COLORS[playerId % PLAYER_COLORS.length];
               const isWinner = playerId === winner;
               const isHuman = playerId === 0;
-              
+
               return (
                 <div
                   key={playerId}
-                  className={`flex items-center justify-between p-3 rounded ${
-                    isWinner ? 'bg-yellow-500/20 border-2 border-yellow-500' : 'bg-gray-600/50'
-                  }`}
+                  className={`flex items-center justify-between p-3 rounded ${isWinner ? 'bg-yellow-500/20 border-2 border-yellow-500' : 'bg-gray-600/50'
+                    }`}
                 >
                   <div className="flex items-center space-x-3">
                     <div className={`w-4 h-4 rounded-full ${playerColor}`}></div>
                     <span className="text-lg font-semibold text-white">
-                      {playerName} {isHuman && '(Вы)'}
+                      {playerName}
                     </span>
                     {isWinner && (
                       <span className="text-yellow-400 font-bold">👑 Победитель</span>
@@ -156,13 +153,13 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
                 const playerBids = playerActions.filter(e => e.action_type === 'bid').length;
                 const playerChallenges = playerActions.filter(e => e.action_type === 'challenge').length;
                 const playerBelieves = playerActions.filter(e => e.action_type === 'believe').length;
-                
+
                 if (playerActions.length === 0) return null;
-                
+
                 return (
                   <div key={playerId} className="flex items-center justify-between p-2 bg-gray-600/30 rounded">
                     <span className="text-gray-300">
-                      {playerName} {playerId === 0 && '(Вы)'}:
+                      {playerName}:
                     </span>
                     <div className="flex space-x-4 text-sm">
                       <span className="text-blue-400">Ставок: {playerBids}</span>
@@ -181,4 +178,5 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
 };
 
 export default GameOverModal;
+
 

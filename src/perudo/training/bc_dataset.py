@@ -156,7 +156,32 @@ def collate_batch(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         for key in keys:
             # Stack tensors along batch dimension
             tensors = [obs[key] for obs in observations]
-            batched_obs[key] = torch.stack(tensors, dim=0)
+            
+            # Special handling for bid_history which may have variable length
+            if key == "bid_history":
+                # Find maximum history length in batch
+                max_length = max(t.shape[0] for t in tensors)
+                
+                # Pad all tensors to max_length
+                padded_tensors = []
+                for t in tensors:
+                    if t.shape[0] < max_length:
+                        # Pad with zeros (padding value is [0, 0] for bid_history)
+                        padding = torch.zeros(
+                            max_length - t.shape[0], 
+                            t.shape[1], 
+                            dtype=t.dtype, 
+                            device=t.device
+                        )
+                        t_padded = torch.cat([t, padding], dim=0)
+                    else:
+                        t_padded = t
+                    padded_tensors.append(t_padded)
+                
+                batched_obs[key] = torch.stack(padded_tensors, dim=0)
+            else:
+                # For other keys, stack directly (they should have same shape)
+                batched_obs[key] = torch.stack(tensors, dim=0)
     
     # Batch actions
     batched_actions = torch.stack(actions, dim=0)

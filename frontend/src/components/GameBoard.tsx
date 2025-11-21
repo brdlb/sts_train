@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { gamesApi, GameState, ExtendedActionHistoryEntry } from '../services/api';
+import { gamesApi, GameState, ExtendedActionHistoryEntry, ActionResult } from '../services/api';
 import Player from './Player';
 import BidControls from './BidControls';
 import { GameHistory } from './GameHistory';
-import Modal from './Modal';
 import DiceRevealModal from './DiceRevealModal';
 import GameOverModal from './GameOverModal';
 import { encode_bid } from '../utils/actions';
@@ -20,15 +19,54 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [gamePhase, setGamePhase] = useState<'bidding' | 'reveal' | 'round_over' | 'game_over'>('bidding');
-  const [modalContent, setModalContent] = useState<{ title: string; body: React.ReactNode } | null>(null);
   const [revealModalEntry, setRevealModalEntry] = useState<ExtendedActionHistoryEntry | null>(null);
-  const [lastActionHistoryLength, setLastActionHistoryLength] = useState(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const isMountedRef = useRef(true);
-  
-  // Refs for auto-scrolling
+
   const playerRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const bidControlsRef = useRef<HTMLDivElement | null>(null);
+
+  const findLastRevealEntry = useCallback((history: ExtendedActionHistoryEntry[]): ExtendedActionHistoryEntry | null => {
+    for (let i = history.length - 1; i >= 0; i--) {
+      const entry = history[i];
+      if ((entry.action_type === 'challenge' || entry.action_type === 'believe') &&
+        entry.consequences &&
+        entry.consequences.all_player_dice) {
+        return entry;
+      }
+    }
+    return null;
+  }, []);
+
+  const findLastBidderId = useCallback((gameState: GameState): number | null => {
+    if (!gameState.current_bid) return null;
+
+    if (gameState.last_bid_player_id !== undefined && gameState.last_bid_player_id !== null) {
+      return gameState.last_bid_player_id;
+    }
+
+    if (gameState.extended_action_history) {
+      for (let i = gameState.extended_action_history.length - 1; i >= 0; i--) {
+        const entry = gameState.extended_action_history[i];
+        if (entry.action_type === 'bid' &&
+          entry.action_data?.quantity === gameState.current_bid[0] &&
+          entry.action_data?.value === gameState.current_bid[1]) {
+          return entry.player_id;
+        }
+      }
+    }
+
+    if (gameState.bid_history.length > 0) {
+      const lastBidInHistory = gameState.bid_history[gameState.bid_history.length - 1];
+      if (lastBidInHistory && lastBidInHistory.length >= 3 &&
+        lastBidInHistory[1] === gameState.current_bid[0] &&
+        lastBidInHistory[2] === gameState.current_bid[1]) {
+        return lastBidInHistory[0];
+      }
+    }
+
+    return null;
+  }, []);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -49,30 +87,20 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
       gameId,
       (data) => {
         if (data.type === 'ai_turn') {
-          // Update game state with each AI turn
           if (data.state) {
             setGameState(data.state);
-            if (data.state.extended_action_history) {
-              setLastActionHistoryLength(data.state.extended_action_history.length);
-            }
           }
 
-          // Check if game is over
           if (data.game_over) {
             setProcessing(false);
             setGamePhase('game_over');
             eventSourceRef.current = null;
-            if (data.winner !== undefined) {
-              onGameEnd();
-            }
+            // Don't call onGameEnd() here - let the modal show first
+            // onGameEnd will be called when user closes the GameOverModal
           }
         } else if (data.type === 'done') {
-          // All AI turns completed
           if (data.state) {
             setGameState(data.state);
-            if (data.state.extended_action_history) {
-              setLastActionHistoryLength(data.state.extended_action_history.length);
-            }
           }
           setProcessing(false);
           setGamePhase('bidding');
@@ -96,40 +124,43 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     eventSourceRef.current = eventSource;
   }, [gameId, onGameEnd]);
 
+  const handleGameOver = useCallback((result: ActionResult) => {
+    if (result.game_over) {
+      setGamePhase('game_over');
+      // onGameEnd(); // Removed to allow modal to show
+    }
+  }, [onGameEnd]);
+
+  const handleAfterAction = useCallback((result: ActionResult) => {
+    setGameState(result.state);
+    handleGameOver(result);
+    if (!result.game_over) {
+      subscribeToAiTurns();
+    }
+  }, [handleGameOver, subscribeToAiTurns]);
+
   const loadGameState = useCallback(async (skipSSECheck: boolean = false) => {
     if (!isMountedRef.current) return;
-    
-    // Do not load state if SSE is active to avoid race conditions and duplicate updates
-    // Skip this check for initial load or when explicitly requested
+
     if (!skipSSECheck && (eventSourceRef.current || processing)) {
       return;
     }
-    
+
     try {
       const state = await gamesApi.getState(gameId);
       if (!isMountedRef.current) return;
-      
-      // Double-check that SSE didn't start while we were fetching (only if not initial load)
-      if (!skipSSECheck && (eventSourceRef.current || processing)) {
-        return;
-      }
-      
+
       setGameState(state);
       setLoading(false);
       setError(null);
-      
-      if (state.extended_action_history) {
-        setLastActionHistoryLength(state.extended_action_history.length);
-      }
 
       if (state.game_over) {
         setGamePhase('game_over');
-        onGameEnd();
+        // Don't call onGameEnd() here - let the modal show first
+        // onGameEnd will be called when user closes the GameOverModal
       } else if (state.current_player === 0) {
-        // If it's human's turn, ensure processing is false to enable controls
         setProcessing(false);
       } else if (state.current_player !== 0 && !eventSourceRef.current) {
-        // If it's AI's turn and we're not already subscribed, subscribe to AI turns
         subscribeToAiTurns();
       }
     } catch (err) {
@@ -142,27 +173,22 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
   useEffect(() => {
     if (!isMountedRef.current) return;
-    
-    // Initial load - skip SSE check for first load
+
     loadGameState(true);
-    // Poll for game state updates (only when not processing AI turns and not human's turn)
-    // IMPORTANT: Do not poll when processing is true or SSE is active to avoid race conditions
     const interval = setInterval(() => {
-      // Check conditions at the time of execution, not when interval was created
       if (
-        isMountedRef.current && 
-        !gameState?.game_over && 
-        !processing && 
-        !eventSourceRef.current && 
+        isMountedRef.current &&
+        !gameState?.game_over &&
+        !processing &&
+        !eventSourceRef.current &&
         gameState?.current_player !== 0
       ) {
         loadGameState(false);
       }
-    }, 2000); // Poll every 2 seconds
+    }, 2000);
 
     return () => {
       clearInterval(interval);
-      // Cleanup SSE connection
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
@@ -170,36 +196,43 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     };
   }, [gameId, loadGameState, gameState?.game_over, processing, gameState?.current_player]);
 
-  // Check for new challenge/believe results
+
+  const lastAcknowledgedRevealTurnRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (!gameState?.extended_action_history) return;
-    
-    const currentLength = gameState.extended_action_history.length;
-    if (currentLength > lastActionHistoryLength) {
-      const newEntries = gameState.extended_action_history.slice(lastActionHistoryLength);
-      
-      // Find the LAST challenge/believe entry with all_player_dice (most recent)
-      let lastRevealEntry: ExtendedActionHistoryEntry | null = null;
-      for (const entry of newEntries) {
-        if ((entry.action_type === 'challenge' || entry.action_type === 'believe') && 
-            entry.consequences && 
-            entry.consequences.all_player_dice) {
-          lastRevealEntry = entry;
-        }
-      }
-      
-      // Show modal only for the last entry with all_player_dice
+
+    if (revealModalEntry) {
+      return;
+    }
+
+    const isAwaitingReveal = gameState.awaiting_reveal_confirmation === true;
+    const history = gameState.extended_action_history;
+
+    if (isAwaitingReveal) {
+      const lastRevealEntry = findLastRevealEntry(history);
       if (lastRevealEntry) {
+        // Check if we already acknowledged this specific reveal
+        if (lastAcknowledgedRevealTurnRef.current === lastRevealEntry.turn_number) {
+          return;
+        }
+
+        console.log('Round end detected - showing reveal modal', {
+          awaitingReveal: isAwaitingReveal,
+          actionType: lastRevealEntry.action_type,
+          turnNumber: lastRevealEntry.turn_number
+        });
         setGamePhase('round_over');
         setRevealModalEntry(lastRevealEntry);
+      } else {
+        console.warn('Round end detected but no reveal entry found', {
+          awaitingReveal: isAwaitingReveal,
+          historyLength: history.length,
+        });
       }
-      
-      // Update lastActionHistoryLength at the end
-      setLastActionHistoryLength(currentLength);
     }
-  }, [gameState?.extended_action_history, lastActionHistoryLength]);
+  }, [gameState, revealModalEntry, findLastRevealEntry]);
 
-  // Auto-scroll to current player
   useEffect(() => {
     if (!gameState) return;
 
@@ -216,8 +249,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     return () => clearTimeout(timeoutId);
   }, [gameState?.current_player, gameState?.turn_number]);
 
-  // Optimize ref callback to avoid unnecessary re-renders
-  // Must be called before any conditional returns to follow Rules of Hooks
   const setPlayerRef = useCallback((playerId: number) => {
     return (el: HTMLDivElement | null) => {
       playerRefs.current[playerId] = el;
@@ -231,19 +262,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
       setProcessing(true);
       const action = encode_bid(quantity, value);
       const result = await gamesApi.makeAction(gameId, action);
-      setGameState(result.state);
-      
-      if (result.state.extended_action_history) {
-        setLastActionHistoryLength(result.state.extended_action_history.length);
-      }
-
-      if (result.game_over) {
-        setGamePhase('game_over');
-        onGameEnd();
-      } else {
-        // Subscribe to AI turns stream
-        subscribeToAiTurns();
-      }
+      handleAfterAction(result);
     } catch (err) {
       setError('Failed to make bid');
       console.error(err);
@@ -257,18 +276,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     try {
       setProcessing(true);
       setGamePhase('reveal');
-      const result = await gamesApi.makeAction(gameId, 0); // 0 = challenge
-      setGameState(result.state);
-      
-      // Don't update lastActionHistoryLength here - let useEffect handle it
-
-      if (result.game_over) {
-        setGamePhase('game_over');
-        onGameEnd();
-      } else {
-        // Subscribe to AI turns stream
-        subscribeToAiTurns();
-      }
+      const result = await gamesApi.makeAction(gameId, 0);
+      handleAfterAction(result);
     } catch (err) {
       setError('Failed to challenge');
       console.error(err);
@@ -283,18 +292,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     try {
       setProcessing(true);
       setGamePhase('reveal');
-      const result = await gamesApi.makeAction(gameId, 1); // 1 = believe
-      setGameState(result.state);
-      
-      // Don't update lastActionHistoryLength here - let useEffect handle it
-
-      if (result.game_over) {
-        setGamePhase('game_over');
-        onGameEnd();
-      } else {
-        // Subscribe to AI turns stream
-        subscribeToAiTurns();
-      }
+      const result = await gamesApi.makeAction(gameId, 1);
+      handleAfterAction(result);
     } catch (err) {
       setError('Failed to call believe');
       console.error(err);
@@ -335,13 +334,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     );
   }
 
-  // Extract player dice from observation static_info or dice_values
   const playerDice: number[] = [];
   if (gameState.player_dice?.dice_values) {
     playerDice.push(...gameState.player_dice.dice_values);
   } else if (gameState.player_dice?.static_info) {
     const staticInfo = gameState.player_dice.static_info;
-    // Last 5 values in static_info are player dice
     const diceStart = staticInfo.length - 5;
     for (let i = diceStart; i < staticInfo.length; i++) {
       const dieValue = Math.round(staticInfo[i]);
@@ -353,47 +350,13 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
   const canChallenge = gameState.current_bid !== null && gameState.bid_history.length > 0;
   const canBelieve = gameState.current_bid !== null && !gameState.believe_called;
-  
-  // Calculate total dice in play
   const totalDiceInPlay = gameState.player_dice_count.reduce((sum, count) => sum + count, 0);
-  
-  // Find last bidder from extended_action_history or bid_history
-  let lastBidderId: number | null = null;
+  const lastBidderId = findLastBidderId(gameState);
 
-  // First, try to use last_bid_player_id if available (most reliable)
-  if (gameState.current_bid && gameState.last_bid_player_id !== undefined && gameState.last_bid_player_id !== null) {
-    lastBidderId = gameState.last_bid_player_id;
-  }
-  // Try to find from extended_action_history
-  else if (gameState.current_bid && gameState.extended_action_history) {
-    for (let i = gameState.extended_action_history.length - 1; i >= 0; i--) {
-      const entry = gameState.extended_action_history[i];
-      if (entry.action_type === 'bid' && 
-          entry.action_data?.quantity === gameState.current_bid[0] &&
-          entry.action_data?.value === gameState.current_bid[1]) {
-        lastBidderId = entry.player_id;
-        break;
-      }
-    }
-  }
-
-  // Fallback to bid_history if extended_action_history didn't work
-  if (lastBidderId === null && gameState.bid_history.length > 0 && gameState.current_bid) {
-    const lastBidInHistory = gameState.bid_history[gameState.bid_history.length - 1];
-    if (lastBidInHistory && lastBidInHistory.length >= 3 &&
-        lastBidInHistory[1] === gameState.current_bid[0] && 
-        lastBidInHistory[2] === gameState.current_bid[1]) {
-      lastBidderId = lastBidInHistory[0];
-    }
-  }
-
-  // Arrange players: human player at bottom
   const displayPlayers = [];
-  // Add AI players first
   for (let i = 1; i < gameState.player_dice_count.length; i++) {
     displayPlayers.push(i);
   }
-  // Add human player last
   displayPlayers.push(0);
 
   return (
@@ -405,7 +368,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
 
       <div className="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-2 lg:gap-8 lg:items-end z-10">
-        {/* Player List Column */}
         <div className="w-full flex flex-col justify-start space-y-4">
           {displayPlayers.map((playerId) => (
             <Player
@@ -426,7 +388,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
           ))}
         </div>
 
-        {/* Controls Column */}
         <div className="w-full space-y-4 flex flex-col">
           {processing && gameState.current_player !== 0 && (
             <div className="bg-gray-700/50 p-4 rounded-lg flex items-center justify-center space-x-3 w-full max-w-lg mx-auto">
@@ -436,7 +397,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
               </span>
             </div>
           )}
-          
+
           <div ref={bidControlsRef} className="w-full flex justify-center">
             {gameState.current_player === 0 && !gameState.game_over && gamePhase === 'bidding' && (
               <BidControls
@@ -474,37 +435,28 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         </div>
       </div>
 
-      <Modal
-        isOpen={!!modalContent}
-        title={modalContent?.title || ''}
-        onClose={() => {
-          setModalContent(null);
-          setGamePhase('bidding');
-        }}
-      >
-        {modalContent?.body}
-      </Modal>
-
       <DiceRevealModal
         isOpen={!!revealModalEntry}
         onClose={async () => {
+          // Mark this reveal as acknowledged before closing
+          if (revealModalEntry) {
+            lastAcknowledgedRevealTurnRef.current = revealModalEntry.turn_number;
+          }
+
           setRevealModalEntry(null);
-          
-          // If game is awaiting reveal confirmation, continue to next round
+
           if (gameState?.awaiting_reveal_confirmation) {
             try {
               const result = await gamesApi.continueRound(gameId);
               setGameState(result.state);
               setGamePhase('bidding');
-              
-              // If it's AI's turn, subscribe to AI turns
+
               if (result.state.current_player !== 0 && !result.state.game_over) {
                 subscribeToAiTurns();
               }
             } catch (err) {
               console.error('Failed to continue round:', err);
               setError('Failed to continue to next round');
-              // Fallback: just update phase
               setGamePhase('bidding');
             }
           } else {

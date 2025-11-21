@@ -6,12 +6,13 @@ interface ModalProps {
   onClose: () => void;
   children: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl';
+  actionLabel?: string;
 }
 
-const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children, maxWidth = 'lg' }) => {
+const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children, maxWidth = 'lg', actionLabel = 'Продолжить' }) => {
   const modalRef = useRef<HTMLDivElement>(null);
   const firstFocusableRef = useRef<HTMLButtonElement>(null);
-  
+
   const maxWidthClasses = {
     sm: 'max-w-sm',
     md: 'max-w-md',
@@ -95,7 +96,7 @@ const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children, maxWidt
             className="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-3 px-8 rounded-lg transition-colors text-lg focus:outline-none focus:ring-2 focus:ring-yellow-400"
             aria-label="Close modal"
           >
-            Continue
+            {actionLabel}
           </button>
         </div>
       </div>

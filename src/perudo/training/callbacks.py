@@ -242,6 +242,11 @@ class SelfPlayTrainingCallback(BaseCallback):
         self.episode_rewards = []
         self.episode_lengths = []
         self.episode_wins = []
+        # Statistics for botplay/selfplay win ratio (for mixed mode)
+        self.botplay_wins = 0
+        self.botplay_episodes = 0
+        self.selfplay_wins = 0
+        self.selfplay_episodes = 0
         # For thread-safe access
         self._lock = threading.Lock()
 
@@ -334,11 +339,24 @@ class SelfPlayTrainingCallback(BaseCallback):
                 episode_dict = info.get("episode", {})
                 winner = info.get("winner", episode_dict.get("winner", -1))
                 
+                # Get episode mode (botplay or selfplay) for mixed mode tracking
+                episode_mode = info.get("episode_mode", None)
+                
                 with self._lock:
                     self.episode_rewards.append(episode_reward)
                     self.episode_lengths.append(episode_length)
                     win = 1 if winner == 0 else 0
                     self.episode_wins.append(win)
+                    
+                    # Track wins and episodes by mode for mixed mode statistics
+                    if episode_mode == "botplay":
+                        self.botplay_episodes += 1
+                        if win == 1:
+                            self.botplay_wins += 1
+                    elif episode_mode == "selfplay":
+                        self.selfplay_episodes += 1
+                        if win == 1:
+                            self.selfplay_wins += 1
         
         # Standard snapshot logic by step frequency (optional, for backward compatibility)
         # Main saving happens after each training cycle through _pending_snapshot
@@ -450,6 +468,45 @@ class SelfPlayTrainingCallback(BaseCallback):
                                 avg_winrate = pool_stats.get("average_winrate", 0.0)
                                 if avg_winrate is not None:
                                     self.logger.record("custom/opponent_pool_avg_winrate", avg_winrate)
+                        
+                        # Log botplay/selfplay win ratio (only in mixed mode)
+                        # Get training_mode from vec_env
+                        training_mode = None
+                        if self.vec_env is not None:
+                            # Try to get from wrapped env (VecMonitor should forward)
+                            if hasattr(self.vec_env, 'training_mode'):
+                                training_mode = self.vec_env.training_mode
+                            # Try underlying env if accessible
+                            elif hasattr(self.vec_env, 'venv') and hasattr(self.vec_env.venv, 'training_mode'):
+                                training_mode = self.vec_env.venv.training_mode
+                        
+                        if training_mode == "mixed":
+                            # Calculate winrates for botplay and selfplay
+                            botplay_winrate = None
+                            selfplay_winrate = None
+                            botplay_selfplay_ratio = None
+                            
+                            if self.botplay_episodes > 0:
+                                botplay_winrate = self.botplay_wins / self.botplay_episodes
+                            
+                            if self.selfplay_episodes > 0:
+                                selfplay_winrate = self.selfplay_wins / self.selfplay_episodes
+                            
+                            # Calculate ratio if both winrates are available
+                            if botplay_winrate is not None and selfplay_winrate is not None and selfplay_winrate > 0:
+                                botplay_selfplay_ratio = botplay_winrate / selfplay_winrate
+                            
+                            # Log metrics to TensorBoard
+                            if botplay_winrate is not None:
+                                self.logger.record("custom/botplay_winrate", botplay_winrate)
+                            if selfplay_winrate is not None:
+                                self.logger.record("custom/selfplay_winrate", selfplay_winrate)
+                            if botplay_selfplay_ratio is not None:
+                                self.logger.record("custom/botplay_selfplay_win_ratio", botplay_selfplay_ratio)
+                            
+                            # Also log episode counts for debugging
+                            self.logger.record("custom/botplay_episodes", self.botplay_episodes)
+                            self.logger.record("custom/selfplay_episodes", self.selfplay_episodes)
                         
                         # In SB3, logger.dump() is called automatically after model.update()
                         # However, to ensure custom metrics are written, we can call it explicitly

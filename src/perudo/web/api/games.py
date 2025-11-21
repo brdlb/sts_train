@@ -58,13 +58,18 @@ async def create_game(request: CreateGameRequest):
         )
 
     try:
+        print(f"Creating game with models: {request.model_paths}")
         game_id, session = game_server.create_game(request.model_paths)
         state = session.get_public_state()
+        print(f"Game created successfully: {game_id}")
         return {
             "game_id": game_id,
             "state": state,
         }
     except Exception as e:
+        import traceback
+        error_msg = f"Failed to create game: {str(e)}\n{traceback.format_exc()}"
+        print(f"ERROR: {error_msg}")
         raise HTTPException(status_code=500, detail=f"Failed to create game: {str(e)}")
 
 
@@ -186,9 +191,6 @@ async def stream_ai_turns(game_id: str):
     def generate():
         """Generator function for SSE stream."""
         try:
-            # Sync state before processing (get_public_state() will sync, but we need to check first)
-            session._sync_state()
-
             # Only process if it's not human's turn and game is not over
             if session.game_over or session.current_player == 0:
                 # Send final state
