@@ -54,6 +54,7 @@ const Player = forwardRef<HTMLDivElement, PlayerProps>(({ player, isCurrent, gam
             dotColor="bg-white"
             starColor="text-white"
             borderColor="border-white"
+            noBorder={false}
             dotSizeClass="w-1.5 h-1.5"
             starSizeClass="text-2xl"
           />
@@ -69,6 +70,7 @@ const Player = forwardRef<HTMLDivElement, PlayerProps>(({ player, isCurrent, gam
             dotColor="bg-white"
             starColor="text-white"
             borderColor="border-white"
+            noBorder={false}
             dotSizeClass="w-1.5 h-1.5"
             starSizeClass="text-2xl"
           />

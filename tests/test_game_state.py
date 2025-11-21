@@ -15,7 +15,8 @@ def test_game_state_initialization():
     assert game_state.dice_per_player == 5
     assert len(game_state.player_dice) == 4
     assert all(len(dice) == 5 for dice in game_state.player_dice)
-    assert game_state.current_player == 0
+    # Starting player should be randomly selected from valid range
+    assert 0 <= game_state.current_player < game_state.num_players
     assert game_state.current_bid is None
     assert not game_state.game_over
 
@@ -85,7 +86,8 @@ def test_reset():
     game_state.reset()
     
     assert game_state.current_bid is None
-    assert game_state.current_player == 0
+    # Starting player should be randomly selected from valid range after reset
+    assert 0 <= game_state.current_player < game_state.num_players
     assert len(game_state.bid_history) == 0
     assert not game_state.game_over
 

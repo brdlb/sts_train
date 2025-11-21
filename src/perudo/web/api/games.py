@@ -58,13 +58,18 @@ async def create_game(request: CreateGameRequest):
         )
 
     try:
+        print(f"Creating game with models: {request.model_paths}")
         game_id, session = game_server.create_game(request.model_paths)
         state = session.get_public_state()
+        print(f"Game created successfully: {game_id}")
         return {
             "game_id": game_id,
             "state": state,
         }
     except Exception as e:
+        import traceback
+        error_msg = f"Failed to create game: {str(e)}\n{traceback.format_exc()}"
+        print(f"ERROR: {error_msg}")
         raise HTTPException(status_code=500, detail=f"Failed to create game: {str(e)}")
 
 
@@ -86,12 +91,7 @@ async def get_game_state(game_id: str):
     if session is None:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    # Sync state from game_state before processing AI turns
-    # This ensures we have the correct current_player
-    session.current_player = session.env.game_state.current_player
-    session.game_over = session.env.game_state.game_over
-
-    # Don't process AI turns here - client will subscribe to SSE stream
+    # get_public_state() automatically syncs state, so no manual sync needed
     return session.get_public_state()
 
 
@@ -120,16 +120,51 @@ async def make_action(game_id: str, request: ActionRequest):
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
 
-    # Sync state from game_state after human action
-    # This ensures we have the correct current_player after the action
-    session.current_player = session.env.game_state.current_player
-    session.game_over = session.env.game_state.game_over
-
-    # Don't process AI turns here - client will subscribe to SSE stream
+    # _process_action() already syncs state, so no manual sync needed
     # Get updated state
     result["state"] = session.get_public_state()
 
     return result
+
+
+@router.post("/{game_id}/continue-round")
+async def continue_round(game_id: str):
+    """
+    Continue to next round after reveal (challenge/believe).
+    
+    This endpoint is called after the user has viewed the reveal modal
+    and is ready to proceed to the next round.
+    
+    Args:
+        game_id: Game session ID
+        
+    Returns:
+        Updated game state
+    """
+    if game_server is None:
+        raise HTTPException(status_code=500, detail="Game server not initialized")
+    
+    session = game_server.get_game(game_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    if not session.awaiting_reveal_confirmation:
+        raise HTTPException(
+            status_code=400, 
+            detail="Not awaiting reveal confirmation"
+        )
+    
+    try:
+        # Continue to next round
+        session.continue_to_next_round()
+        
+        # Return updated state
+        return {
+            "success": True,
+            "state": session.get_public_state()
+        }
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/{game_id}/ai-turns")
@@ -156,10 +191,6 @@ async def stream_ai_turns(game_id: str):
     def generate():
         """Generator function for SSE stream."""
         try:
-            # Sync state before processing
-            session.current_player = session.env.game_state.current_player
-            session.game_over = session.env.game_state.game_over
-
             # Only process if it's not human's turn and game is not over
             if session.game_over or session.current_player == 0:
                 # Send final state

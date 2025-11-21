@@ -30,98 +30,96 @@ class RewardConfig:
     Intermediate rewards are set to 0.0 but kept in structure for easy re-enabling if needed.
     """
 
-    # Game outcome rewards
-    win_reward: float = 2  # Reward for winning the game (sparse reward - main objective)
-    win_dice_bonus: float = 0.1 # Bonus per remaining die when winning the game
-    lose_penalty: float = 0  # Penalty for losing the game (negative reward to distinguish from win)
+    win_reward: float = 2
+    win_dice_bonus: float = 0
+    lose_penalty: float = -0.5
 
-    # Dice loss penalties
-    dice_lost_penalty: float = -0.5 # Minimal penalty per die lost (for training stability)
+    dice_lost_penalty: float = 0
 
-    # Challenge rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
-    challenge_success_reward: float = 0.1  # Reward for successful challenge (caught bluff) - DISABLED
-    challenge_failure_penalty: float = -0.05  # Penalty for unsuccessful challenge that led to dice loss - DISABLED
+    challenge_success_reward: float = 0.1
+    challenge_failure_penalty: float = 0
 
-    # Believe rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
-    believe_success_reward: float = 0.1  # Reward for successful believe call (caught bluff) - DISABLED
-    believe_failure_penalty: float = -0.05  # Penalty for unsuccessful believe call that led to dice loss - DISABLED
+    believe_success_reward: float = 0.1
+    believe_failure_penalty: float = 0
 
-    # Bid-related rewards and penalties (DISABLED - set to 0.0 for sparse rewards)
-    bid_small_penalty: float = -0.01  # Small negative reward for bidding to encourage finishing the round - DISABLED
-    unsuccessful_bid_penalty: float = -0.1  # Penalty for unsuccessful bid that led to dice loss - DISABLED
+    bid_small_penalty: float = 0
+    unsuccessful_bid_penalty: float = -0.1
 
+    bid_minimal_bonus: float = 0
+    bid_excess_penalty: float = 0
+    bid_excess_threshold: int = 1
 
-    round_no_dice_lost_reward: float = 0.0  # Reward for each round in which the agent did not lose a die - DISABLED
-    successful_bluff_reward: float = 0.0  # Reward for successful bluff (bid was correct or never challenged) - DISABLED
+    round_no_dice_lost_reward: float = 0.0
+    successful_bluff_reward: float = 0.0
 
-    # Bid defense rewards (DISABLED - set to 0.0 for sparse rewards)
-    # When opponent challenges/believes agent's bid and fails
-    defend_bid_reward_challenge: float = 0.01  # Reward for successfully defending bid against challenge - DISABLED
-    defend_bid_reward_believe: float = 0.01  # Reward for successfully defending bid against believe - DISABLED
+    defend_bid_reward_challenge: float = 0.0
+    defend_bid_reward_believe: float = 0.0
 
-    # Dice advantage rewards (DISABLED - set to 0.0 for sparse rewards)
-    # WARNING: these are given every step and accumulate, can cause reward hacking
-    dice_advantage_reward: float = 0.0  # Reward per die advantage over average opponents - DISABLED
-    dice_advantage_max: float = 0.0  # Maximum dice advantage to consider (cap) - kept for structure
-    leader_bonus: float = 0.0  # Bonus reward for being the leader (having more dice than all opponents) - DISABLED
+    dice_advantage_reward: float = 0.0
+    dice_advantage_max: float = 0.0
+    leader_bonus: float = 0.0
 
-    # Invalid action penalty (kept minimal to guide learning, but not too harsh)
-    invalid_action_penalty: float = -0.01  # Minimal penalty for invalid action (helps avoid invalid actions)
+    invalid_action_penalty: float = -0.00
 
 
 @dataclass
 class TrainingConfig:
     """Training configuration."""
 
-    # PPO parameters (optimized to address critical clip_fraction issue)
-    policy: str = "MultiInputPolicy"  # Use MultiInputPolicy for Dict observation space
-    policy_kwargs: Optional[Dict] = None  # Will be set based on transformer config
-    device: Optional[str] = None  # If None, will auto-detect (GPU with CPU fallback)
-    opponent_device: Optional[str] = "cpu"  
-    learning_rate: float = 4.0e-5  # Reduced for stability with enhanced critic architecture
+    policy: str = "MultiInputPolicy"
+    policy_kwargs: Optional[Dict] = None
+    device: Optional[str] = None
+    opponent_device: Optional[str] = "cuda"
+    learning_rate: float = 1.3e-4
     n_steps: int = 8192
     batch_size: int = 512
-    n_epochs: int = 10  # Reduced to prevent overfitting on batch
+    n_epochs: int = 4
     gamma: float = 0.99
-    gae_lambda: float = 0.95
-    clip_range: float = 0.01  # Critically reduced to address high clip_fraction
-    ent_coef: float = 0.15  # Slightly increased for better exploration
-    vf_coef: float = 0.5  # Standard value; with enhanced critic architecture (vf=[256, 128]), high coefficient can cause overfitting
-    max_grad_norm: float = 0.5  # Increased for less aggressive gradient clipping
+    gae_lambda: float = 0.98
+    clip_range: float = 0.15
+    ent_coef: float = 0.12
+    vf_coef: float = 0.25
+    max_grad_norm: float = 0.3
     
-    # Adaptive entropy coefficient parameters
-    adaptive_entropy: bool = True  # Enable adaptive entropy coefficient adjustment
-    entropy_threshold_low: float = -3.48  # Slightly lower for earlier response
-    entropy_threshold_high: float = -3.32  # Slightly higher for wider range
-    entropy_adjustment_rate: float = 0.008  # Rate of ent_coef adjustment per update (slower)
-    entropy_max_coef: float = 0.25  # Maximum allowed ent_coef value to prevent excessive exploration  
+    adaptive_entropy: bool = True
+    entropy_threshold_low: float = -3.4
+    entropy_threshold_high: float = -3.0
+    entropy_adjustment_rate: float = 0.03
+    entropy_max_coef: float = 0.2
     
-    # Transformer parameters (optimized for sequence length 40)
-    transformer_features_dim: int = 256  # Increased to handle richer feature information
-    transformer_num_layers: int = 3  # Increased from 2 for better expressiveness
-    transformer_num_heads: int = 8  # Increased for better attention analysis (128/8=16 per head)
-    transformer_embed_dim: int = 128  # Increased to provide more "space" for representing each move
-    transformer_dim_feedforward: int = 512  # Standard practice: 128 * 4 = 512
-    transformer_history_length: int = 40  # Increased to cover full game history
-    transformer_dropout: float = 0.1  # Explicit dropout parameter
+    transformer_features_dim: int = 256
+    transformer_num_layers: int = 3
+    transformer_num_heads: int = 8
+    transformer_embed_dim: int = 256
+    transformer_dim_feedforward: int = 1024
+    transformer_history_length: int = 24
+    transformer_dropout: float = 0.15
 
-    # Training parameters
-    num_envs: int = 1  # Number of parallel environments (tables)
-    total_timesteps: int = 1_000_000
-    save_freq: int = 100_000  # Save model every N steps
-    eval_freq: int = 50_000  # Evaluate model every N steps
-    eval_episodes: int = 10  # Number of episodes for evaluation
+    num_envs: int = 4
+    total_timesteps: int = 6_000_000
+    save_freq: int = 100_000
+    eval_freq: int = 50_000
+    eval_episodes: int = 10
 
-    # Paths
     log_dir: str = "logs"
     model_dir: str = "models"
     tb_log_name: Optional[str] = None
 
+    use_rule_based_opponents: bool = True
+    training_mode: str = "mixed"
+    bot_difficulty_distribution: Dict[str, float] = field(
+        default_factory=lambda: {"EASY": 0.33, "MEDIUM": 0.33, "HARD": 0.34}
+    )  # Distribution of bot difficulty levels
+    mixed_mode_ratio: float = 0.7  # Ratio of botplay in mixed mode (0.0-1.0)
+    allowed_bot_personalities: Optional[List[str]] = None # field( default_factory=lambda: ["CONSERVATIVE"] )  
+
+    # Trajectory collection
+    collect_trajectories: bool = False  
+    
     # Other
     verbose: int = 1
     seed: Optional[int] = None
-    debug_moves: bool = True  # Enable detailed move logging (forces num_envs=1)
-
+    debug_moves: bool = True 
 
 @dataclass
 class Config:

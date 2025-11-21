@@ -31,6 +31,7 @@ export interface ActionConsequences {
   bidder_id: number | null;
   error_msg: string | null;
   player_dice_count_after: number[];
+  all_player_dice?: number[][]; // All player dice values during reveal (challenge/believe only)
 }
 
 export interface ExtendedActionHistoryEntry {
@@ -57,11 +58,14 @@ export interface GameState {
   extended_action_history?: ExtendedActionHistoryEntry[];
   palifico_active: boolean[];
   believe_called: boolean;
+  last_bid_player_id?: number | null;
   player_dice: {
     bid_history: number[][];
     static_info: number[];
+    dice_values?: number[];
   };
   public_info: any;
+  awaiting_reveal_confirmation?: boolean; // Flag indicating if waiting for user to continue after reveal
 }
 
 export interface CreateGameRequest {
@@ -194,6 +198,13 @@ export const gamesApi = {
     return response.data;
   },
 
+  continueRound: async (gameId: string): Promise<{ success: boolean; state: GameState }> => {
+    const response = await api.post<{ success: boolean; state: GameState }>(
+      `/games/${gameId}/continue-round`
+    );
+    return response.data;
+  },
+
   subscribeToAiTurns: (
     gameId: string,
     onTurn: (data: {
@@ -208,14 +219,13 @@ export const gamesApi = {
     }) => void,
     onError?: (error: Event) => void
   ): EventSource => {
-    const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
     const eventSource = new EventSource(`${API_BASE_URL}/games/${gameId}/ai-turns`);
 
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         onTurn(data);
-        
+
         // Close connection when done
         if (data.type === 'done' || data.type === 'error') {
           eventSource.close();

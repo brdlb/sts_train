@@ -2,13 +2,17 @@ import React, { useState } from 'react';
 import { ModelSelector } from './components/ModelSelector';
 import { GameBoard } from './components/GameBoard';
 import { Statistics } from './components/Statistics';
+import { ToastProvider, useToastContext } from './contexts/ToastContext';
 import { gamesApi } from './services/api';
+import { HelpModal } from './components/HelpModal';
 
 type View = 'select' | 'game' | 'statistics';
 
-function App() {
+function AppContent() {
   const [currentView, setCurrentView] = useState<View>('select');
   const [currentGameId, setCurrentGameId] = useState<string | null>(null);
+  const [showHelpModal, setShowHelpModal] = useState(false);
+  const { showToast } = useToastContext();
 
   const handleStartGame = async (modelPaths: string[]) => {
     try {
@@ -17,7 +21,7 @@ function App() {
       setCurrentView('game');
     } catch (error) {
       console.error('Failed to start game:', error);
-      alert('Failed to start game. Please try again.');
+      showToast('Failed to start game. Please try again.', 'error');
     }
   };
 
@@ -27,57 +31,55 @@ function App() {
   };
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <nav
-        style={{
-          backgroundColor: '#333',
-          color: 'white',
-          padding: '15px 20px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexShrink: 0,
-        }}
-      >
-        <h1 style={{ margin: 0 }}>Perudo Game</h1>
-        <div style={{ display: 'flex', gap: '15px' }}>
+    <div className="h-full flex flex-col bg-gray-800">
+      <nav className="text-white px-5 py-4 flex justify-between items-center flex-shrink-0">
+        <h1 className="m-0 text-2xl font-bold text-orange-400"></h1>
+        <div className="flex gap-4">
           <button
             onClick={() => setCurrentView('select')}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: currentView === 'select' ? '#4CAF50' : '#555',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: 'pointer',
-            }}
+            className={`px-4 py-2 rounded-lg transition-colors ${currentView === 'select'
+              ? 'bg-green-600 hover:bg-green-700'
+              : 'bg-gray-700 hover:bg-gray-600'
+              } text-white font-semibold`}
           >
             New Game
           </button>
           <button
             onClick={() => setCurrentView('statistics')}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: currentView === 'statistics' ? '#4CAF50' : '#555',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: 'pointer',
-            }}
+            className={`px-4 py-2 rounded-lg transition-colors ${currentView === 'statistics'
+              ? 'bg-green-600 hover:bg-green-700'
+              : 'bg-gray-700 hover:bg-gray-600'
+              } text-white font-semibold`}
           >
             Statistics
+          </button>
+          <button
+            onClick={() => setShowHelpModal(true)}
+            className="px-4 py-2 rounded-lg transition-colors bg-gray-700 hover:bg-gray-600 text-white font-semibold text-xl"
+            title="Помощь"
+          >
+            ?
           </button>
         </div>
       </nav>
 
-      <main style={{ flex: 1, overflow: 'auto', padding: '20px' }}>
+      <main className="flex-1 overflow-auto p-5 bg-gray-800">
         {currentView === 'select' && <ModelSelector onStart={handleStartGame} />}
         {currentView === 'game' && currentGameId && (
           <GameBoard gameId={currentGameId} onGameEnd={handleGameEnd} />
         )}
-        {currentView === 'statistics' && <Statistics />}
+        {currentView === 'statistics' && <Statistics key="statistics" />}
       </main>
+      {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} />}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ToastProvider>
+      <AppContent />
+    </ToastProvider>
   );
 }
 

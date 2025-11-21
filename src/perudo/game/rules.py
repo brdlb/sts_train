@@ -42,6 +42,11 @@ class PerudoRules:
         if game_state.player_dice_count[player_id] == 0:
             return False, "Player already out of game"
 
+        # Check that quantity doesn't exceed total dice in game
+        total_dice_in_game = sum(game_state.player_dice_count)
+        if quantity > total_dice_in_game:
+            return False, f"Quantity ({quantity}) cannot exceed total dice in game ({total_dice_in_game})"
+
         # First bid in round cannot be value 1 (since 1s are jokers and counted as any number)
         # Exception: in special round, first bid can be value 1 (but 1s are NOT jokers in special round)
         if game_state.current_bid is None:
@@ -148,11 +153,11 @@ class PerudoRules:
         Returns:
             Tuple (ID of player who loses die, number of dice lost)
         """
-        # The player who made the bid is the last one in the history
-        if not game_state.bid_history:
+        # The player who made the bid is tracked in last_bid_player_id
+        if not game_state.bid_history or game_state.last_bid_player_id is None:
             return challenger_id, 1
 
-        previous_player = game_state.bid_history[-1][0]
+        previous_player = game_state.last_bid_player_id
 
         # If challenge succeeded (bid was wrong), player who made bid loses die
         # If challenge failed (bid was correct), challenger loses die
@@ -240,36 +245,95 @@ class PerudoRules:
             actions.append(("believe", None, None))
 
         # Actions: bids
+        # Calculate total dice in game to limit bid quantities
+        total_dice_in_game = sum(game_state.player_dice_count)
+        
         # Generate possible bids
         if game_state.current_bid is None:
             if game_state.special_round_active:
                 # First bid in special round: quantity 1, any value (including 1)
                 for v in range(1, game_state.total_dice_values + 1):
-                    actions.append(("bid", 1, v))
+                    # CRITICAL: Use is_valid_bid to ensure action is truly valid
+                    is_valid, _ = PerudoRules.is_valid_bid(game_state, player_id, 1, v)
+                    if is_valid:
+                        actions.append(("bid", 1, v))
             else:
                 # First bid - can be any except value 1
-                # No upper limit on quantity - can bid any amount above minimum
+                # Quantity cannot exceed total dice in game
                 min_quantity = 1
-                max_reasonable = 100  # Reasonable upper limit for action space, but no game logic limit
-                for q in range(min_quantity, max_reasonable + 1):
+                max_quantity = min(100, total_dice_in_game)  # Limit by total dice in game
+                for q in range(min_quantity, max_quantity + 1):
                     for v in range(2, game_state.total_dice_values + 1):  # Skip value 1 for first bid
-                        actions.append(("bid", q, v))
+                        # CRITICAL: Use is_valid_bid to ensure action is truly valid
+                        is_valid, _ = PerudoRules.is_valid_bid(game_state, player_id, q, v)
+                        if is_valid:
+                            actions.append(("bid", q, v))
         else:
             # Subsequent bids must be higher
-            # No upper limit on quantity - can bid any amount above minimum required
+            # Quantity cannot exceed total dice in game
             prev_quantity, prev_value = game_state.current_bid
             # Start from minimum possible quantity (1) and let _is_bid_higher filter valid bids
-            # This allows any quantity that satisfies the "higher bid" rule
-            max_reasonable = 100  # Reasonable upper limit for action space, but no game logic limit
-            for q in range(1, max_reasonable + 1):
+            # Limit maximum quantity by total dice in game
+            max_quantity = min(100, total_dice_in_game)  # Limit by total dice in game
+            for q in range(1, max_quantity + 1):
                 for v in range(1, game_state.total_dice_values + 1):
-                    # In special round, value cannot change
-                    if game_state.special_round_active and v != prev_value:
-                        continue
-                    # In Palifico, player cannot change value
-                    if game_state.palifico_active[player_id] and v != prev_value:
-                        continue
-                    if game_state._is_bid_higher(q, v, prev_quantity, prev_value):
+                    # CRITICAL: Use is_valid_bid to ensure action is truly valid
+                    # This catches all edge cases (special_round, palifico, quantity limits, etc.)
+                    is_valid, _ = PerudoRules.is_valid_bid(game_state, player_id, q, v)
+                    if is_valid:
                         actions.append(("bid", q, v))
 
         return actions
+
+    @staticmethod
+    def get_minimal_valid_bid(
+        game_state: GameState,
+        player_id: int,
+    ) -> Optional[Tuple[int, int]]:
+        """
+        Get the minimal valid bid for current game state.
+        
+        This is used to determine if a bid is minimal and should receive bonus,
+        or if it exceeds minimum and should receive penalty.
+        
+        Args:
+            game_state: Current game state
+            player_id: Player ID
+            
+        Returns:
+            Tuple (min_quantity, min_value) or None if no valid bid exists
+        """
+        if game_state.player_dice_count[player_id] == 0:
+            return None
+            
+        total_dice_in_game = sum(game_state.player_dice_count)
+        
+        # First bid in round
+        if game_state.current_bid is None:
+            if game_state.special_round_active:
+                # First bid in special round: quantity must be 1, any value
+                return (1, 1)  # Return minimum (value 1 is minimal)
+            else:
+                # First bid: minimum quantity is 1, but value cannot be 1
+                # So minimal bid is (1, 2)
+                return (1, 2)
+        
+        # Subsequent bids must be higher than current
+        prev_quantity, prev_value = game_state.current_bid
+        
+        # Find minimal valid bid by checking all possible combinations
+        # Start from smallest quantity and value
+        for q in range(1, total_dice_in_game + 1):
+            for v in range(1, game_state.total_dice_values + 1):
+                # In special round, value cannot change
+                if game_state.special_round_active and v != prev_value:
+                    continue
+                # In Palifico, player cannot change value
+                if game_state.palifico_active[player_id] and v != prev_value:
+                    continue
+                # Check if this is a valid higher bid
+                if game_state._is_bid_higher(q, v, prev_quantity, prev_value):
+                    return (q, v)
+        
+        # No valid bid found (shouldn't happen in normal gameplay)
+        return None
