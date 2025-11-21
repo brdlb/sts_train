@@ -6,6 +6,7 @@ import os
 import json
 import sys
 import contextlib
+from datetime import datetime
 from io import StringIO
 import numpy as np
 from typing import Dict, List, Optional, Tuple
@@ -137,7 +138,9 @@ class OpponentPool:
         if not force and step % self.snapshot_freq != 0:
             return None
 
-        snapshot_id = f"{prefix}_step_{step}"
+        # Add date to filename
+        date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        snapshot_id = f"{prefix}_step_{step}_{date_str}"
         snapshot_path = os.path.join(self.pool_dir, f"{snapshot_id}.zip")
 
         # Save model

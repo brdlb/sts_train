@@ -15,6 +15,7 @@ import os
 import pickle
 import numpy as np
 import logging
+from datetime import datetime
 from typing import Optional, Dict, List, Any
 from stable_baselines3.common.callbacks import BaseCallback
 
@@ -797,6 +798,33 @@ class WinnerTrajectoryCollectorCallback(BaseCallback):
             logger.info(f"  Total trajectories collected: {self.trajectories_collected}")
             logger.info(f"  Total trajectories filtered: {self.trajectories_filtered}")
             logger.info(f"  Data directory: {self.data_dir}")
+
+
+class DateCheckpointCallback(BaseCallback):
+    """
+    Callback for saving a model every ``save_freq`` calls
+    to ``env.step()``.
+    The filename includes the date instead of step count.
+    """
+    def __init__(self, save_freq: int, save_path: str, name_prefix: str = "rl_model", verbose: int = 0):
+        super().__init__(verbose)
+        self.save_freq = save_freq
+        self.save_path = save_path
+        self.name_prefix = name_prefix
+
+    def _init_callback(self) -> None:
+        # Create folder if needed
+        if self.save_path is not None:
+            os.makedirs(self.save_path, exist_ok=True)
+
+    def _on_step(self) -> bool:
+        if self.n_calls % self.save_freq == 0:
+            date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(self.save_path, f"{self.name_prefix}_{date_str}")
+            self.model.save(path)
+            if self.verbose > 1:
+                print(f"Saving model checkpoint to {path}")
+        return True
 
 
 

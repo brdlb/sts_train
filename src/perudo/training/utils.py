@@ -13,7 +13,7 @@ import glob
 import shutil
 import json
 import logging
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 import torch
 
 # Setup logger for this module
@@ -75,35 +75,42 @@ def linear_schedule(initial_value: float, final_value: Optional[float] = None, d
     return func
 
 
-def find_latest_model(model_dir: str) -> Optional[str]:
+def find_latest_model(model_dir: str, additional_dirs: Optional[List[str]] = None) -> Optional[str]:
     """
-    Find the latest saved model in the model directory.
+    Find the latest saved model in the model directory and optional additional directories.
     
     Looks for any .zip files and returns the most recent one by modification time.
     
     Args:
-        model_dir: Directory to search for models
+        model_dir: Primary directory to search for models
+        additional_dirs: Optional list of additional directories to search
     
     Returns:
         Path to the latest model (by modification time), or None if no models found
     """
-    print(model_dir)
-    if not os.path.exists(model_dir):
-        return None
+    search_dirs = [model_dir]
+    if additional_dirs:
+        search_dirs.extend(additional_dirs)
     
-    # Find all .zip files in the directory
-    zip_pattern = os.path.join(model_dir, "*.zip")
-    zip_files = glob.glob(zip_pattern)
+    all_zip_files = []
     
-    if not zip_files:
+    for d in search_dirs:
+        if not os.path.exists(d):
+            continue
+            
+        # Find all .zip files in the directory
+        zip_pattern = os.path.join(d, "*.zip")
+        zip_files = glob.glob(zip_pattern)
+        all_zip_files.extend(zip_files)
+    
+    if not all_zip_files:
         return None
     
     # Sort by modification time (most recent first)
-    zip_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-    print(zip_files[0])
+    all_zip_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
     
     # Return the most recent file
-    return zip_files[0]
+    return all_zip_files[0]
 
 
 def restore_model_from_opponent_pool(model_dir: str, pool_dir: str) -> Optional[str]:
