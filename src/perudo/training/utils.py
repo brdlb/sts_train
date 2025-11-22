@@ -91,6 +91,8 @@ def find_latest_model(model_dir: str, additional_dirs: Optional[List[str]] = Non
     search_dirs = [model_dir]
     if additional_dirs:
         search_dirs.extend(additional_dirs)
+
+    print(search_dirs)
     
     all_zip_files = []
     
@@ -110,6 +112,7 @@ def find_latest_model(model_dir: str, additional_dirs: Optional[List[str]] = Non
     all_zip_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
     
     # Return the most recent file
+    print(all_zip_files[0])
     return all_zip_files[0]
 
 

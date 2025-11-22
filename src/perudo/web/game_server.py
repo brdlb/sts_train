@@ -12,6 +12,18 @@ import re
 import traceback
 import time
 import random
+import logging
+import asyncio
+import logging
+import threading
+
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 from ..game.perudo_env import PerudoEnv
 from ..agents.rl_agent import RLAgent
@@ -236,6 +248,9 @@ class GameSession:
         # Save initial state to DB
         self._save_state_to_db()
 
+        # Lock for turn processing to prevent concurrent turns
+        self.turn_lock = asyncio.Lock()
+
     @property
     def current_player(self) -> int:
         """Get current player from environment."""
@@ -362,6 +377,8 @@ class GameSession:
         from ..utils.helpers import action_to_bid
         action_type, param1, param2 = action_to_bid(action, web_config.max_quantity)
         
+        logger.info(f"Game {self.game_id}: Turn {self.turn_number} | Player {player_id} action: {action_type} {param1 if action_type == 'bid' else ''} {param2 if action_type == 'bid' else ''}")
+        
         action_data = {
             "action_type": action_type,
             "quantity": param1 if action_type == "bid" else None,
@@ -381,17 +398,20 @@ class GameSession:
         })
         
         # Save action to DB
-        add_action(
-            SessionLocal(),
-            self.db_game_id,
-            player_id,
-            action_type,
-            action_data,
-            self.turn_number,
-        )
+        with SessionLocal() as db:
+            add_action(
+                db,
+                self.db_game_id,
+                player_id,
+                action_type,
+                action_data,
+                self.turn_number,
+            )
         
         # Increment turn number
         self.turn_number += 1
+        
+        logger.info(f"Game {self.game_id}: Turn advanced to {self.turn_number}. Next player: {self.current_player}")
         
         # Check if round advance is needed (for challenge/believe with auto_advance_round=False)
         if info.get("needs_round_advance") and not self.game_over:
@@ -402,7 +422,9 @@ class GameSession:
         
         # If game is over, finish it in DB
         if self.game_over:
-            finish_game(SessionLocal(), self.db_game_id, self.env.game_state.winner)
+            with SessionLocal() as db:
+                finish_game(db, self.db_game_id, self.env.game_state.winner)
+            logger.info(f"Game {self.game_id}: Game over. Winner: {self.env.game_state.winner}")
         
         # Use custom encoder for serialization via json.loads(json.dumps(...))
         # This ensures all numpy types are converted to native Python types
@@ -415,7 +437,7 @@ class GameSession:
         }
         return json.loads(json.dumps(result, cls=PerudoJSONEncoder))
 
-    def make_human_action(self, action: int) -> Dict[str, Any]:
+    async def make_human_action(self, action: int) -> Dict[str, Any]:
         """
         Make action for human player.
 
@@ -428,24 +450,31 @@ class GameSession:
         if self.game_over:
             return {"error": "Game is over"}
 
-        if self.current_player != 0:
-            return {"error": "Not human player's turn"}
+        # Acquire turn lock to prevent race conditions with AI turns
+        if self.turn_lock.locked():
+            return {"error": "Game is currently processing other turns"}
+            
+        async with self.turn_lock:
+            if self.current_player != 0:
+                return {"error": "Not human player's turn"}
 
-        # Set active player to human
-        self.env.set_active_player(0)
+            # Set active player to human
+            self.env.set_active_player(0)
+            
+            logger.info(f"Game {self.game_id}: Human player (0) executing action {action}")
 
-        # Execute action
-        obs, reward, terminated, truncated, info = self.env.step(action)
+            # Execute action
+            obs, reward, terminated, truncated, info = self.env.step(action)
 
-        # Process action using common method
-        result = self._process_action(0, action, reward, terminated, truncated, info)
-        
-        # Add success flag for human actions
-        result["success"] = True
-        
-        return result
+            # Process action using common method
+            result = self._process_action(0, action, reward, terminated, truncated, info)
+            
+            # Add success flag for human actions
+            result["success"] = True
+            
+            return result
 
-    def _process_ai_turn_loop(self, streaming: bool = False):
+    async def _process_ai_turn_loop(self, streaming: bool = False):
         """
         Common loop for processing AI turns.
         
@@ -458,52 +487,56 @@ class GameSession:
         Yields:
             Dictionary with action result (and updated game state if streaming=True)
         """
-        max_steps = 100  # Protection against infinite loops
-        step_count = 0
-        
-        while not self.game_over and self.current_player != 0 and step_count < max_steps:
-            step_count += 1
+        # Acquire lock to ensure we're the only one processing turns
+        async with self.turn_lock:
+            max_steps = 100  # Protection against infinite loops
+            step_count = 0
             
-            # Check if it's human's turn (player 0)
-            if self.current_player == 0:
-                break
-            
-            ai_player_id = self.current_player
-            
-            # Check if this is an AI player
-            if ai_player_id not in self.ai_agents:
-                # Not an AI player (shouldn't happen, but handle gracefully)
-                break
-            
-            # Get observation for AI player
-            obs = self.env.get_observation_for_player(ai_player_id)
-            self.env.set_active_player(ai_player_id)
-            
-            # Add delay before bot makes a move
-            # Use shorter delay (0.5s) if human player is eliminated, normal delay (1-4s) otherwise
-            if self._is_human_eliminated():
-                delay = 0.5
-            else:
-                delay = random.uniform(1.0, 3.0)
-            time.sleep(delay)
-            
-            # Get action from AI agent
-            ai_agent = self.ai_agents[ai_player_id]
-            action = ai_agent.act(obs, deterministic=True)
-            
-            # Execute action
-            obs, reward, terminated, truncated, info = self.env.step(action)
-            
-            # Process action using common method
-            result = self._process_action(ai_player_id, action, reward, terminated, truncated, info)
-            
-            # Add state to result for streaming mode
-            if streaming:
-                result["state"] = self.get_public_state()
-            
-            yield result
+            while not self.game_over and self.current_player != 0 and step_count < max_steps:
+                step_count += 1
+                
+                # Check if it's human's turn (player 0)
+                if self.current_player == 0:
+                    break
+                
+                ai_player_id = self.current_player
+                
+                # Check if this is an AI player
+                if ai_player_id not in self.ai_agents:
+                    # Not an AI player (shouldn't happen, but handle gracefully)
+                    break
+                
+                # Get observation for AI player
+                obs = self.env.get_observation_for_player(ai_player_id)
+                self.env.set_active_player(ai_player_id)
+                
+                logger.info(f"Game {self.game_id}: AI player {ai_player_id} thinking...")
+                
+                # Add delay before bot makes a move
+                # Use shorter delay (0.5s) if human player is eliminated, normal delay (1-4s) otherwise
+                if self._is_human_eliminated():
+                    delay = 0.5
+                else:
+                    delay = random.uniform(1.0, 3.0)
+                await asyncio.sleep(delay)
+                
+                # Get action from AI agent
+                ai_agent = self.ai_agents[ai_player_id]
+                action = ai_agent.act(obs, deterministic=True)
+                
+                # Execute action
+                obs, reward, terminated, truncated, info = self.env.step(action)
+                
+                # Process action using common method
+                result = self._process_action(ai_player_id, action, reward, terminated, truncated, info)
+                
+                # Add state to result for streaming mode
+                if streaming:
+                    result["state"] = self.get_public_state()
+                
+                yield result
 
-    def process_ai_turns(self) -> List[Dict[str, Any]]:
+    async def process_ai_turns(self) -> List[Dict[str, Any]]:
         """
         Process all AI turns until it's human's turn or game is over.
 
@@ -514,7 +547,10 @@ class GameSession:
             List of actions taken by AI players
         """
         # Collect results from generator into list
-        results = list(self._process_ai_turn_loop(streaming=False))
+        results = []
+        async for result in self._process_ai_turn_loop(streaming=False):
+            results.append(result)
+            
         # Extract only essential fields for non-streaming mode
         return [
             {
@@ -525,7 +561,7 @@ class GameSession:
             for result in results
         ]
 
-    def process_ai_turns_streaming(self):
+    async def process_ai_turns_streaming(self):
         """
         Process AI turns one by one, yielding each turn result.
         
@@ -535,7 +571,8 @@ class GameSession:
         Yields:
             Dictionary with action result and updated game state
         """
-        yield from self._process_ai_turn_loop(streaming=True)
+        async for result in self._process_ai_turn_loop(streaming=True):
+            yield result
 
     def _extract_consequences(self, info: Dict[str, Any], player_id: int, action_type: str) -> Dict[str, Any]:
         """
@@ -653,7 +690,7 @@ class GameSession:
         
         return consequences
 
-    def continue_to_next_round(self) -> None:
+    async def continue_to_next_round(self) -> None:
         """
         Continue to the next round after reveal confirmation.
         
@@ -666,14 +703,15 @@ class GameSession:
         if not self.awaiting_reveal_confirmation:
             raise RuntimeError("Not awaiting reveal confirmation")
         
-        # Advance to next round in environment
-        self.env.advance_to_next_round()
-        
-        # Clear the awaiting flag
-        self.awaiting_reveal_confirmation = False
-        
-        # Save state to DB
-        self._save_state_to_db()
+        async with self.turn_lock:
+            # Advance to next round in environment
+            self.env.advance_to_next_round()
+            
+            # Clear the awaiting flag
+            self.awaiting_reveal_confirmation = False
+            
+            # Save state to DB
+            self._save_state_to_db()
 
     def _save_state_to_db(self):
         """Save current game state to database."""
@@ -689,12 +727,13 @@ class GameSession:
             "winner": game_state.winner,
         }
 
-        save_game_state(
-            SessionLocal(),
-            self.db_game_id,
-            self.turn_number,
-            state_json,
-        )
+        with SessionLocal() as db:
+            save_game_state(
+                db,
+                self.db_game_id,
+                self.turn_number,
+                state_json,
+            )
 
 
 class GameServer:
@@ -746,7 +785,8 @@ class GameServer:
                 "model_path": model_path,
             })
 
-        db_game = create_game(SessionLocal(), num_players=4, players_info=players_info)
+        with SessionLocal() as db:
+            db_game = create_game(db, num_players=4, players_info=players_info)
 
         # Create game session
         game_id = str(uuid.uuid4())
@@ -757,6 +797,8 @@ class GameServer:
         )
 
         self.sessions[game_id] = session
+        
+        logger.info(f"Created new game session {game_id} with models {model_paths}")
 
         # Don't process AI turns here - client will subscribe to SSE stream
         # This allows each bot turn to be sent separately

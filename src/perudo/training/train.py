@@ -24,7 +24,6 @@ from .opponent_pool import OpponentPool
 from .rule_based_pool import RuleBasedOpponentPool
 from ..agents.transformer_extractor import TransformerFeaturesExtractor
 from .callbacks import (
-    AdvantageNormalizationCallback,
     AdaptiveEntropyCallback,
     SelfPlayTrainingCallback,
     ModelUpdateProgressCallback,
@@ -448,9 +447,7 @@ class SelfPlayTraining:
         # Create callbacks
         callbacks = []
         
-        # Advantage normalization callback
-        adv_norm_callback = AdvantageNormalizationCallback(verbose=self.config.training.verbose)
-        callbacks.append(adv_norm_callback)
+
         
         # Adaptive entropy callback (if enabled)
         if getattr(self.config.training, 'adaptive_entropy', False):

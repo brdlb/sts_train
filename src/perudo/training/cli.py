@@ -31,14 +31,14 @@ def main():
     parser.add_argument(
         "--n-steps",
         type=int,
-        default=8192,
-        help="Number of steps to collect before update (recommended: 8192 for 16 envs)",
+        default=None,
+        help="Number of steps to collect before update (default: use value from config)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=256,
-        help="Batch size for training (recommended: 256 for n_steps=8192)",
+        default=None,
+        help="Batch size for training (default: use value from config)",
     )
     parser.add_argument(
         "--device",
@@ -58,8 +58,10 @@ def main():
     # Create configuration
     config = DEFAULT_CONFIG
     # total_timesteps is set only in config.py, not overridden here
-    config.training.n_steps = args.n_steps
-    config.training.batch_size = args.batch_size
+    if args.n_steps is not None:
+        config.training.n_steps = args.n_steps
+    if args.batch_size is not None:
+        config.training.batch_size = args.batch_size
     config.training.device = args.device
     config.training.verbose = args.verbose  # Set verbose from command line
     

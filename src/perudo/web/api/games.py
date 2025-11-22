@@ -115,7 +115,7 @@ async def make_action(game_id: str, request: ActionRequest):
         raise HTTPException(status_code=404, detail="Game not found")
 
     # Make human action
-    result = session.make_human_action(request.action)
+    result = await session.make_human_action(request.action)
 
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
@@ -156,7 +156,7 @@ async def continue_round(game_id: str):
     
     try:
         # Continue to next round
-        session.continue_to_next_round()
+        await session.continue_to_next_round()
         
         # Return updated state
         return {
@@ -188,7 +188,7 @@ async def stream_ai_turns(game_id: str):
     if session is None:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    def generate():
+    async def generate():
         """Generator function for SSE stream."""
         try:
             # Only process if it's not human's turn and game is not over
@@ -198,7 +198,7 @@ async def stream_ai_turns(game_id: str):
                 return
 
             # Process AI turns and stream each one
-            for turn_result in session.process_ai_turns_streaming():
+            async for turn_result in session.process_ai_turns_streaming():
                 # Format as SSE event
                 data = json.dumps({
                     "type": "ai_turn",

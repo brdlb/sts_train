@@ -7,7 +7,6 @@ from .train import SelfPlayTraining
 from .cli import main
 from .opponent_pool import OpponentPool, OpponentSnapshot
 from .callbacks import (
-    AdvantageNormalizationCallback,
     AdaptiveEntropyCallback,
     SelfPlayTrainingCallback,
     ModelUpdateProgressCallback,
@@ -29,7 +28,6 @@ __all__ = [
     "main",
     "OpponentPool",
     "OpponentSnapshot",
-    "AdvantageNormalizationCallback",
     "AdaptiveEntropyCallback",
     "SelfPlayTrainingCallback",
     "ModelUpdateProgressCallback",
