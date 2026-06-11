@@ -78,7 +78,6 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
               const playerName = PLAYER_NAMES[playerId] || `Player ${playerId}`;
               const playerColor = PLAYER_COLORS[playerId % PLAYER_COLORS.length];
               const isWinner = playerId === winner;
-              const isHuman = playerId === 0;
 
               return (
                 <div

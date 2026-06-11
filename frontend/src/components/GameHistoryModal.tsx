@@ -8,8 +8,7 @@ interface GameHistoryModalProps {
 }
 
 const formatActionDescription = (
-  action: GameHistory['actions'][0],
-  players: GameHistory['players']
+  action: GameHistory['actions'][0]
 ): { description: string; details?: string } => {
   const playerName = getPlayerName(action.player_id);
   const { action_type, action_data } = action;
@@ -110,7 +109,7 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
           ) : (
             <div>
               {actions.map((action, index) => {
-                const actionInfo = formatActionDescription(action, players);
+                const actionInfo = formatActionDescription(action);
                 const isHuman = action.player_id === 0;
                 const backgroundColor = isHuman
                   ? index % 2 === 0
@@ -161,4 +160,3 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
     </div>
   );
 };
-

@@ -149,12 +149,6 @@ const DiceRevealModal: React.FC<DiceRevealModalProps> = ({
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {playerDice.map((die, index) => {
-                    const shouldHighlight = bidValue !== null && (
-                      isSpecialRound || bidValue === 1
-                        ? die === bidValue
-                        : die === bidValue || die === 1
-                    );
-                    
                     return (
                       <Dice
                         key={index}

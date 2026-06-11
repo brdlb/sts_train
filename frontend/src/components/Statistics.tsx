@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { statisticsApi, gamesApi, PlayerStatistics, ModelStatistics, GameHistory } from '../services/api';
 import { GameHistoryModal } from './GameHistoryModal';
 import { useToastContext } from '../contexts/ToastContext';
-import { Bar, Line } from 'react-chartjs-2'; // Подключаем графики
+import { Bar } from 'react-chartjs-2'; // Подключаем графики
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -218,4 +218,3 @@ export const Statistics: React.FC = () => {
     </div>
   );
 };
-
