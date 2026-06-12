@@ -8,6 +8,12 @@ from src.perudo.game.game_state import GameState
 from src.perudo.game.rules import PerudoRules
 
 
+def force_bid(game_state, player_id, quantity, value):
+    """Set up a deterministic bid in tests that manually assemble state."""
+    game_state.current_player = player_id
+    assert game_state.set_bid(player_id, quantity, value)
+
+
 def test_game_state_initialization():
     """Test game state initialization."""
     game_state = GameState(num_players=4, dice_per_player=5)
@@ -37,7 +43,7 @@ def test_set_bid():
     game_state.roll_dice()
     
     # First bid
-    assert game_state.set_bid(0, 3, 4)
+    force_bid(game_state, 0, 3, 4)
     assert game_state.current_bid == (3, 4)
     
     # Second bid must be higher
@@ -52,7 +58,7 @@ def test_challenge_bid():
     game_state.roll_dice()
     
     # Set a bid
-    game_state.set_bid(0, 10, 4)
+    force_bid(game_state, 0, 10, 4)
     
     # Challenge the bid
     success, actual_count, bid_quantity = game_state.challenge_bid(1)
@@ -80,7 +86,7 @@ def test_lose_dice():
 def test_reset():
     """Test game reset."""
     game_state = GameState(num_players=2, dice_per_player=5)
-    game_state.set_bid(0, 3, 4)
+    force_bid(game_state, 0, 3, 4)
     game_state.current_player = 1
     
     game_state.reset()
@@ -194,7 +200,7 @@ def test_bid_validation_ones_exception():
     game_state.roll_dice()
     
     # Set bid: 5 fives
-    game_state.set_bid(0, 5, 5)
+    force_bid(game_state, 0, 5, 5)
     game_state.current_player = 1
     
     # Can reduce to 3 ones (half of 5, rounding up)
@@ -214,7 +220,7 @@ def test_bid_validation_after_ones():
     game_state.roll_dice()
     
     # Set bid: 2 ones
-    game_state.set_bid(0, 2, 1)
+    force_bid(game_state, 0, 2, 1)
     game_state.current_player = 1
     
     # Can increase quantity of ones
@@ -234,7 +240,7 @@ def test_bid_validation_quantity_increase():
     game_state.roll_dice()
     
     # Set bid: 3 fives
-    game_state.set_bid(0, 3, 5)
+    force_bid(game_state, 0, 3, 5)
     game_state.current_player = 1
     
     # Can increase quantity with any value
@@ -252,7 +258,7 @@ def test_bid_validation_same_quantity():
     game_state.roll_dice()
     
     # Set bid: 3 fives
-    game_state.set_bid(0, 3, 5)
+    force_bid(game_state, 0, 3, 5)
     game_state.current_player = 1
     
     # Can keep quantity same if value increases
@@ -273,7 +279,7 @@ def test_challenge_equality_case():
     game_state.player_dice = [[1, 1, 3, 3, 3], [2, 2, 3, 3, 5]]
     
     # Set bid: 7 threes
-    game_state.set_bid(0, 7, 3)
+    force_bid(game_state, 0, 7, 3)
     game_state.current_player = 1
     
     # Challenge: actual count should be 7 (equal to bid)
@@ -300,7 +306,7 @@ def test_challenge_greater_than_case():
     game_state.player_dice = [[1, 1, 3, 3, 3], [2, 3, 3, 3, 5]]
     
     # Set bid: 6 threes
-    game_state.set_bid(0, 6, 3)
+    force_bid(game_state, 0, 6, 3)
     game_state.current_player = 1
     
     # Challenge: actual count should be 8 (greater than bid)

@@ -7,10 +7,17 @@ from src.perudo.game.game_state import GameState
 from src.perudo.game.rules import PerudoRules
 
 
+def force_bid(game_state, player_id, quantity, value):
+    """Set up a deterministic bid in tests that manually assemble state."""
+    game_state.current_player = player_id
+    assert game_state.set_bid(player_id, quantity, value)
+
+
 def test_is_valid_bid():
     """Test bid validation."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
+    game_state.current_player = 0
     
     # Valid first bid
     is_valid, msg = PerudoRules.is_valid_bid(game_state, 0, 3, 4)
@@ -21,7 +28,7 @@ def test_is_valid_bid():
     assert not is_valid
     
     # Set first bid
-    game_state.set_bid(0, 3, 4)
+    force_bid(game_state, 0, 3, 4)
     game_state.current_player = 1
     
     # Valid second bid (higher)
@@ -37,13 +44,14 @@ def test_can_challenge():
     """Test challenge possibility."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
+    game_state.current_player = 0
     
     # Cannot challenge if no bid
     can_challenge, msg = PerudoRules.can_challenge(game_state, 0)
     assert not can_challenge
     
     # Set bid
-    game_state.set_bid(0, 3, 4)
+    force_bid(game_state, 0, 3, 4)
     game_state.current_player = 1
     
     # Now can challenge
@@ -55,13 +63,14 @@ def test_can_call_believe():
     """Test believe call possibility - any player can believe."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
+    game_state.current_player = 0
     
     # Cannot call believe if no bid
     can_believe, msg = PerudoRules.can_call_believe(game_state, 0)
     assert not can_believe
     
     # Set bid
-    game_state.set_bid(0, 3, 4)
+    force_bid(game_state, 0, 3, 4)
     game_state.current_player = 1
     
     # Any player can call believe if there's a bid
@@ -78,7 +87,7 @@ def test_process_challenge_result():
     """Test processing challenge result."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
-    game_state.set_bid(0, 10, 4)
+    force_bid(game_state, 0, 10, 4)
     
     # Simulate successful challenge
     loser_id, dice_lost = PerudoRules.process_challenge_result(
@@ -101,6 +110,7 @@ def test_get_available_actions():
     """Test getting available actions."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
+    game_state.current_player = 0
     
     # The first player must have bid actions available
     actions = PerudoRules.get_available_actions(game_state, 0)
@@ -108,7 +118,7 @@ def test_get_available_actions():
     assert any(action[0] == "bid" for action in actions)
     
     # Set a bid
-    game_state.set_bid(0, 3, 4)
+    force_bid(game_state, 0, 3, 4)
     game_state.current_player = 1
     
     # The second player must have available actions: bid, challenge, believe
@@ -127,7 +137,7 @@ def test_special_round_value_cannot_change():
     game_state.roll_dice()
     
     # Set first bid (must be quantity 1 in special round)
-    game_state.set_bid(0, 1, 4)
+    force_bid(game_state, 0, 1, 4)
     game_state.current_player = 1
     
     # In special round, cannot change value
@@ -150,7 +160,7 @@ def test_challenge_with_special_round():
     game_state.player_dice = [[1, 1, 3], [2, 2, 3, 3, 5]]
     
     # Set bid: 5 threes (expecting 1s to count as jokers, but they shouldn't in special round)
-    game_state.set_bid(0, 5, 3)
+    force_bid(game_state, 0, 5, 3)
     game_state.current_player = 1
     
     # Challenge: actual count should be 3 (only the 3s, not the 1s)
@@ -168,7 +178,7 @@ def test_challenge_with_normal_round():
     game_state.player_dice = [[1, 1, 3], [2, 2, 3, 3, 5]]
     
     # Set bid: 5 threes (expecting 1s to count as jokers)
-    game_state.set_bid(0, 5, 3)
+    force_bid(game_state, 0, 5, 3)
     game_state.current_player = 1
     
     # Challenge: actual count should be 5 (3s + 1s as jokers)
@@ -181,6 +191,7 @@ def test_first_bid_cannot_be_value_1():
     """Test that first bid cannot have value 1."""
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
+    game_state.current_player = 0
     
     # First bid with value 1 should be invalid
     is_valid, msg = PerudoRules.is_valid_bid(game_state, 0, 3, 1)
@@ -199,7 +210,7 @@ def test_believe_exact_match_gains_die():
     game_state.player_dice_count[1] = 4  # Bid maker has 4 dice
     game_state.roll_dice()
     
-    game_state.set_bid(0, 5, 3)
+    force_bid(game_state, 0, 5, 3)
     game_state.current_player = 1
     
     # Set dice so count exactly equals bid (5 threes)
@@ -236,7 +247,7 @@ def test_believe_exact_match_starts_round():
     game_state.player_dice_count[1] = 5  # Believer has 5 dice
     game_state.roll_dice()
     
-    game_state.set_bid(0, 5, 3)
+    force_bid(game_state, 0, 5, 3)
     game_state.current_player = 1
     
     # Set dice so count exactly equals bid (5 threes)
@@ -262,7 +273,7 @@ def test_believe_not_exact_match_loses_die():
     game_state = GameState(num_players=2, dice_per_player=5)
     game_state.roll_dice()
     
-    game_state.set_bid(0, 5, 3)
+    force_bid(game_state, 0, 5, 3)
     game_state.current_player = 1
     
     # Set dice so count doesn't equal bid (more than bid)
@@ -322,6 +333,7 @@ def test_special_round_first_bid():
     game_state.player_dice_count[0] = 1
     game_state.declare_special_round(0)
     game_state.roll_dice()
+    game_state.current_player = 0
     
     # First bid in special round must be quantity 1
     is_valid, msg = PerudoRules.is_valid_bid(game_state, 0, 1, 3)
@@ -343,7 +355,7 @@ def test_get_available_actions_believe():
     game_state.roll_dice()
     
     # Set a bid
-    game_state.set_bid(0, 3, 4)
+    force_bid(game_state, 0, 3, 4)
     game_state.current_player = 1
     
     # Any player should have believe available

@@ -58,7 +58,7 @@ def test_save_snapshot():
             def mask_fn(env):
                 obs, _ = env.reset()
                 return obs["action_mask"].astype(bool)
-            env = ActionMasker(env, mask_fn=mask_fn)
+            env = ActionMasker(env, action_mask_fn=mask_fn)
             return env
         vec_env = DummyVecEnv([make_env])
         model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
@@ -100,7 +100,7 @@ def test_sample_opponent():
             def mask_fn(env):
                 obs, _ = env.reset()
                 return obs["action_mask"].astype(bool)
-            env = ActionMasker(env, mask_fn=mask_fn)
+            env = ActionMasker(env, action_mask_fn=mask_fn)
             return env
         vec_env = DummyVecEnv([make_env])
         model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
@@ -140,7 +140,7 @@ def test_update_winrate():
             def mask_fn(env):
                 obs, _ = env.reset()
                 return obs["action_mask"].astype(bool)
-            env = ActionMasker(env, mask_fn=mask_fn)
+            env = ActionMasker(env, action_mask_fn=mask_fn)
             return env
         vec_env = DummyVecEnv([make_env])
         model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
@@ -214,7 +214,7 @@ def test_cleanup_snapshots():
             def mask_fn(env):
                 obs, _ = env.reset()
                 return obs["action_mask"].astype(bool)
-            env = ActionMasker(env, mask_fn=mask_fn)
+            env = ActionMasker(env, action_mask_fn=mask_fn)
             return env
         vec_env = DummyVecEnv([make_env])
         model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
@@ -250,7 +250,7 @@ def test_load_snapshot():
             def mask_fn(env):
                 obs, _ = env.reset()
                 return obs["action_mask"].astype(bool)
-            env = ActionMasker(env, mask_fn=mask_fn)
+            env = ActionMasker(env, action_mask_fn=mask_fn)
             return env
         vec_env = DummyVecEnv([make_env])
         model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)
@@ -290,7 +290,7 @@ def test_get_best_snapshot():
             def mask_fn(env):
                 obs, _ = env.reset()
                 return obs["action_mask"].astype(bool)
-            env = ActionMasker(env, mask_fn=mask_fn)
+            env = ActionMasker(env, action_mask_fn=mask_fn)
             return env
         vec_env = DummyVecEnv([make_env])
         model = MaskablePPO("MultiInputPolicy", vec_env, verbose=0)

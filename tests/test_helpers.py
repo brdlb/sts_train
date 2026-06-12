@@ -169,9 +169,9 @@ def test_create_observation_vector_shape():
         num_agents=4,
     )
     
-    # Expected size: agent_id(4) + current_bid(2) + history(10*3) + 
+    # Expected size: agent_id(4) + current_bid(2) + history(10*2) + 
     # dice_count(4) + current_player(1) + palifico(4) + believe(1) + player_dice(5)
-    expected_size = 4 + 2 + 10 * 3 + 4 + 1 + 4 + 1 + 5
+    expected_size = 4 + 2 + 10 * 2 + 4 + 1 + 4 + 1 + 5
     assert obs.shape == (expected_size,)
     assert obs.dtype == np.float32
 

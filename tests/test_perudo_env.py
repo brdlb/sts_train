@@ -7,6 +7,12 @@ import numpy as np
 from src.perudo.game.perudo_env import PerudoEnv
 
 
+def force_env_bid(env, player_id, quantity, value):
+    """Set up a deterministic bid in tests that manually assemble env state."""
+    env.game_state.current_player = player_id
+    assert env.game_state.set_bid(player_id, quantity, value)
+
+
 def test_env_initialization():
     """Test environment initialization."""
     env = PerudoEnv(num_players=4, dice_per_player=5)
@@ -56,10 +62,11 @@ def test_env_observation_shape():
     env = PerudoEnv(num_players=2, dice_per_player=5, history_length=10)
     obs, _ = env.reset()
     
-    assert obs['bid_history'].shape == (10, 3)
+    assert obs['bid_history'].shape == (10, 2)
     # New format: agent_id(num_players) + current_bid(2) +
-    # dice_count(num_players) + current_player(1) + palifico(num_players) + believe(1) + player_dice(5)
-    # total for num_players=8 is 8 + 2 + 8 + 1 + 8 + 1 + 5 = 33
+    # dice_count(num_players) + current_player(1) + palifico(num_players) + believe(1) +
+    # special_round_active(1) + round_number(1) + player_dice(5)
+    # total for num_players=8 is 8 + 2 + 8 + 1 + 8 + 1 + 1 + 1 + 5 = 35
     static_info_size = (
             8  # agent_id one-hot
             + 2  # current_bid (quantity, value)
@@ -67,6 +74,8 @@ def test_env_observation_shape():
             + 1  # current_player
             + 8  # palifico
             + 1  # believe
+            + 1  # special_round_active
+            + 1  # round_number
             + 5  # player_dice
         )
     assert obs['static_info'].shape == (static_info_size,)
@@ -168,11 +177,11 @@ def test_env_game_over():
 
 def test_next_round_starts_with_player_who_lost_die():
     """Test that next round starts with player who lost die in challenge."""
-    env = PerudoEnv(num_players=3, dice_per_player=5)
+    env = PerudoEnv(num_players=3, dice_per_player=5, random_num_players=False)
     obs, _ = env.reset()
     
     # Set up a bid
-    env.game_state.set_bid(0, 10, 3)  # Player 0 makes bid
+    force_env_bid(env, 0, 10, 3)  # Player 0 makes bid
     env.game_state.current_player = 1
     env.set_active_player(1)
     
@@ -190,13 +199,13 @@ def test_next_round_starts_with_player_who_lost_die():
 
 def test_next_round_starts_with_player_who_gained_die():
     """Test that next round starts with player who gained die in believe."""
-    env = PerudoEnv(num_players=2, dice_per_player=5)
+    env = PerudoEnv(num_players=2, dice_per_player=5, random_num_players=False)
+    obs, _ = env.reset()
     env.game_state.player_dice_count[0] = 3  # Bid maker has 3 dice
     env.game_state.player_dice_count[1] = 4  # Believer has 4 dice
-    obs, _ = env.reset()
     
     # Set up a bid
-    env.game_state.set_bid(0, 5, 3)  # Player 0 makes bid
+    force_env_bid(env, 0, 5, 3)  # Player 0 makes bid
     env.game_state.current_player = 1
     env.set_active_player(1)
     
@@ -215,11 +224,11 @@ def test_next_round_starts_with_player_who_gained_die():
 
 def test_next_round_starts_with_player_who_lost_die_in_believe():
     """Test that next round starts with player who lost die when believe failed."""
-    env = PerudoEnv(num_players=2, dice_per_player=5)
+    env = PerudoEnv(num_players=2, dice_per_player=5, random_num_players=False)
     obs, _ = env.reset()
     
     # Set up a bid
-    env.game_state.set_bid(0, 5, 3)  # Player 0 makes bid
+    force_env_bid(env, 0, 5, 3)  # Player 0 makes bid
     env.game_state.current_player = 1
     env.set_active_player(1)
     
