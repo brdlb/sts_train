@@ -1,4 +1,6 @@
 export type Action = { action_type: 'bid'; quantity: number; value: number } | { action_type: 'challenge' | 'believe' };
+export const MIN_PLAYERS = 2;
+export const MAX_PLAYERS = 6;
 export type Player = { seat: number; name: string; tokenHash: string; dice: number[]; diceCount: number; connected: boolean };
 export type HistoryEntry = { player_id: number; action_type: Action['action_type']; action_data: { action_type: string; quantity: number | null; value: number | null }; consequences: Record<string, unknown>; turn_number: number };
 export type RoomState = {

@@ -1,4 +1,5 @@
 import { applyAction, continueRound, startGame, viewFor } from './game';
+import { MAX_PLAYERS } from './types';
 import type { Action, Env, Player, RoomState } from './types';
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
@@ -19,7 +20,7 @@ export class RoomDurableObject {
       const url = new URL(request.url); const parts = url.pathname.split('/').filter(Boolean); let s: RoomState;
       if (request.method === 'POST' && parts.at(-1) === 'initialize') {
         const { room_id, player_name } = await request.json<{ room_id: string; player_name: string }>(); const token = crypto.randomUUID() + crypto.randomUUID();
-        s = { roomId: room_id, joinCode: roomCode(), status: 'lobby', hostSeat: 0, players: [{ seat: 0, name: cleanName(player_name), tokenHash: await hash(token), dice: [], diceCount: 5, connected: false }, null, null, null], gameId: null, currentPlayer: 0, currentBid: null, lastBidPlayer: null, bidHistory: [], history: [], palifico: [false, false, false, false], specialRound: false, round: 0, stateVersion: 1, winner: null, awaitingReveal: false, lastActivity: Date.now(), processed: {} };
+        s = { roomId: room_id, joinCode: roomCode(), status: 'lobby', hostSeat: 0, players: [{ seat: 0, name: cleanName(player_name), tokenHash: await hash(token), dice: [], diceCount: 5, connected: false }, ...Array.from({ length: MAX_PLAYERS - 1 }, () => null)], gameId: null, currentPlayer: 0, currentBid: null, lastBidPlayer: null, bidHistory: [], history: [], palifico: Array(MAX_PLAYERS).fill(false), specialRound: false, round: 0, stateVersion: 1, winner: null, awaitingReveal: false, lastActivity: Date.now(), processed: {} };
         await this.save(s); return json({ room: publicRoom(s), player_id: 0, player_token: token }, 201);
       }
       s = await this.state();

@@ -1,10 +1,11 @@
+import { MAX_PLAYERS, MIN_PLAYERS } from './types';
 import type { Action, HistoryEntry, RoomState } from './types';
 
 export type Rng = () => number;
 export const cryptoRng: Rng = () => crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;
 const roll = (count: number, rng: Rng) => Array.from({ length: count }, () => Math.floor(rng() * 6) + 1);
 const active = (s: RoomState) => s.players.filter((p) => p && p.diceCount > 0).map((p) => p!.seat);
-const nextActive = (s: RoomState, seat: number) => { for (let i = 1; i <= 4; i++) { const n = (seat + i) % 4; if (s.players[n] && s.players[n]!.diceCount > 0) return n; } return seat; };
+const nextActive = (s: RoomState, seat: number) => { for (let i = 1; i <= s.players.length; i++) { const n = (seat + i) % s.players.length; if (s.players[n] && s.players[n]!.diceCount > 0) return n; } return seat; };
 export const encodeBid = (q: number, v: number) => (q - 1) * 6 + v - 1;
 export const isHigherBid = (q: number, v: number, old: [number, number]) => {
   const [oq, ov] = old;
@@ -13,10 +14,12 @@ export const isHigherBid = (q: number, v: number, old: [number, number]) => {
   return q > oq || (q === oq && v > ov);
 };
 export const startGame = (s: RoomState, rng: Rng = cryptoRng) => {
-  if (s.status !== 'lobby' || s.players.some((p) => !p)) throw new Error('Room must have four players');
-  s.status = 'playing'; s.gameId = crypto.randomUUID(); s.currentPlayer = Math.floor(rng() * 4); s.round = 1;
+  const occupied = s.players.filter(Boolean).length;
+  if (s.status !== 'lobby' || occupied < MIN_PLAYERS || occupied > MAX_PLAYERS) throw new Error(`Room must have ${MIN_PLAYERS}-${MAX_PLAYERS} players`);
+  const playerSeats = s.players.flatMap((p) => p ? [p.seat] : []);
+  s.status = 'playing'; s.gameId = crypto.randomUUID(); s.currentPlayer = playerSeats[Math.floor(rng() * playerSeats.length)]; s.round = 1;
   s.players.forEach((p) => { if (p) { p.diceCount = 5; p.dice = roll(5, rng); } });
-  s.palifico = [false, false, false, false];
+  s.palifico = s.players.map(() => false);
 };
 const countBid = (s: RoomState, value: number) => s.players.reduce((n, p) => n + (p ? p.dice.filter((d) => d === value || (!s.specialRound && value !== 1 && d === 1)).length : 0), 0);
 const append = (s: RoomState, player: number, action: Action, consequences: Record<string, unknown>) => {
