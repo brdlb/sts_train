@@ -6,7 +6,7 @@ const hash = async (value: string) => Array.from(new Uint8Array(await crypto.sub
 const publicRoom = (s: RoomState) => ({ room_id: s.roomId, join_code: s.joinCode, status: s.status, game_id: s.gameId, state_version: s.stateVersion, seats: s.players.map((p, player_id) => ({ player_id, seat_type: p ? 'human' : 'empty', player_name: p?.name ?? null, is_connected: p?.connected ?? false })) });
 const roomCode = () => crypto.randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase();
 
-export class RoomDurableObject implements DurableObject {
+export class RoomDurableObject {
   private sockets = new Map<WebSocket, number>();
   constructor(private ctx: DurableObjectState, private env: Env) {}
   private async state(): Promise<RoomState> { const state = await this.ctx.storage.get<RoomState>('state'); if (!state) throw new Error('Room not initialized'); return state; }
@@ -31,11 +31,11 @@ export class RoomDurableObject implements DurableObject {
       }
       const seat = await this.seat(s, this.token(request)); if (seat < 0) return json({ error: 'Unauthorized' }, 401);
       if (request.method === 'POST' && parts.at(-1) === 'start') { if (seat !== s.hostSeat) return json({ error: 'Only the host can start' }, 403); startGame(s); s.stateVersion++; await this.save(s); await this.broadcast(s, 'game_started'); return json({ room: publicRoom(s), state: viewFor(s, seat) }); }
-      if (url.pathname.endsWith('/ws')) return this.connect(request, s, seat);
+      if (url.pathname.endsWith('/ws')) return this.acceptWebSocket(request, s, seat);
       return json({ error: 'Not found' }, 404);
     } catch (error) { return json({ error: error instanceof Error ? error.message : 'Bad request' }, 400); }
   }
-  private connect(request: Request, s: RoomState, seat: number) {
+  private acceptWebSocket(request: Request, s: RoomState, seat: number) {
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
     const pair = new WebSocketPair(); const [client, server] = Object.values(pair); server.accept(); this.sockets.set(server, seat); s.players[seat]!.connected = true;
     server.send(JSON.stringify({ type: 'connected', room: publicRoom(s), state: s.status === 'lobby' ? undefined : viewFor(s, seat) }));

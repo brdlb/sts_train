@@ -17,5 +17,5 @@ export default {
     if (request.method === 'GET' && parts[0] === 'api' && parts[1] === 'games' && parts[2] && parts[3] === 'history') { const token = request.headers.get('Authorization')?.replace(/^Bearer\s+/i, ''); if (!token) return json({ error: 'Unauthorized' }, 401); const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)))).map((n) => n.toString(16).padStart(2, '0')).join(''); const player = await env.DB.prepare('SELECT 1 FROM game_players WHERE game_id = ? AND token_hash = ?').bind(parts[2], digest).first(); if (!player) return json({ error: 'Forbidden' }, 403); const [game, actions] = await Promise.all([env.DB.prepare('SELECT * FROM games WHERE id = ?').bind(parts[2]).first(), env.DB.prepare('SELECT turn_number, player_seat, type, payload_json, consequences_json, created_at FROM game_actions WHERE game_id = ? ORDER BY turn_number').bind(parts[2]).all()]); return json({ game, actions: actions.results }); }
     return env.ASSETS.fetch(request);
   },
-  async scheduled(_event: ScheduledEvent, env: Env) { await env.DB.prepare('DELETE FROM games WHERE expires_at < ?').bind(Date.now()).run(); }
+  async scheduled(_controller: ScheduledController, env: Env) { await env.DB.prepare('DELETE FROM games WHERE expires_at < ?').bind(Date.now()).run(); }
 } satisfies ExportedHandler<Env>;
