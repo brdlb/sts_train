@@ -1,0 +1,20 @@
+{
+  "name": "perudo-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm --prefix frontend run build",
+    "cf:dev": "npm run build && wrangler dev",
+    "cf:test": "vitest run",
+    "cf:migrations:preview": "wrangler d1 migrations list perudo-history --remote",
+    "cf:migrations:apply": "wrangler d1 migrations apply perudo-history --remote",
+    "cf:deploy": "npm run build && npm run cf:migrations:apply && wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.0",
+    "@cloudflare/workers-types": "^4.20250701.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.24.0"
+  }
+}

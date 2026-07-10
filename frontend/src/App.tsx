@@ -1,34 +1,39 @@
 import { useState } from 'react';
-import { ModelSelector } from './components/ModelSelector';
 import { GameBoard } from './components/GameBoard';
 import { Statistics } from './components/Statistics';
 import { ToastProvider, useToastContext } from './contexts/ToastContext';
-import { gamesApi } from './services/api';
+import { Room } from './services/api';
 import { HelpModal } from './components/HelpModal';
+import { MultiplayerLobby } from './components/MultiplayerLobby';
 
 type View = 'select' | 'game' | 'statistics';
 
 function AppContent() {
   const [currentView, setCurrentView] = useState<View>('select');
   const [currentGameId, setCurrentGameId] = useState<string | null>(null);
+  const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
+  const [playerToken, setPlayerToken] = useState<string | null>(null);
+  const [myPlayerId, setMyPlayerId] = useState<number | null>(null);
   const [showHelpModal, setShowHelpModal] = useState(false);
-  const { showToast } = useToastContext();
+  useToastContext();
 
-  const handleStartGame = async (modelPaths: string[]) => {
-    try {
-      const result = await gamesApi.create({ model_paths: modelPaths });
-      setCurrentGameId(result.game_id);
-      setCurrentView('game');
-    } catch (error) {
-      console.error('Failed to start game:', error);
-      showToast('Failed to start game. Please try again.', 'error');
-    }
+  const handleRoomGameStart = (room: Room, token: string, playerId: number) => {
+    setCurrentRoom(room);
+    setCurrentGameId(room.game_id);
+    setPlayerToken(token);
+    setMyPlayerId(playerId);
+    setCurrentView('game');
   };
 
   const handleGameEnd = () => {
     setCurrentView('select');
     setCurrentGameId(null);
+    setCurrentRoom(null);
+    setPlayerToken(null);
+    setMyPlayerId(null);
   };
+
+  const initialRoomId = new URLSearchParams(window.location.search).get('room');
 
   return (
     <div className="h-full flex flex-col bg-gray-800">
@@ -64,9 +69,21 @@ function AppContent() {
       </nav>
 
       <main className="flex-1 overflow-auto p-5 bg-gray-800">
-        {currentView === 'select' && <ModelSelector onStart={handleStartGame} />}
-        {currentView === 'game' && currentGameId && (
-          <GameBoard gameId={currentGameId} onGameEnd={handleGameEnd} />
+        {currentView === 'select' && (
+          <MultiplayerLobby
+            initialRoomId={initialRoomId}
+            onGameStart={handleRoomGameStart}
+          />
+        )}
+        {currentView === 'game' && currentGameId && currentRoom && playerToken && myPlayerId !== null && (
+          <GameBoard
+            gameId={currentGameId}
+            roomId={currentRoom.room_id}
+            playerToken={playerToken}
+            myPlayerId={myPlayerId}
+            initialRoom={currentRoom}
+            onGameEnd={handleGameEnd}
+          />
         )}
         {currentView === 'statistics' && <Statistics key="statistics" />}
       </main>

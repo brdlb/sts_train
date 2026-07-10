@@ -38,6 +38,9 @@ class GamePlayer(Base):
     player_id = Column(Integer, nullable=False)  # 0-3 for 4 players
     player_type = Column(String, nullable=False)  # 'human' or 'ai'
     model_path = Column(String, nullable=True)  # Path to model if AI player
+    display_name = Column(String, nullable=True)
+    seat_type = Column(String, nullable=True)  # 'human' or 'bot'
+    join_token = Column(String, nullable=True)
 
     # Relationship
     game = relationship("Game", back_populates="players")

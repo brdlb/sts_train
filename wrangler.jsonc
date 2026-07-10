@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "perudo",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-07-10",
+  "assets": { "directory": "./frontend/dist", "not_found_handling": "single-page-application" },
+  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "RoomDurableObject" }] },
+  "d1_databases": [{ "binding": "DB", "database_name": "perudo-history", "database_id": "REPLACE_WITH_D1_DATABASE_ID" }],
+  "triggers": { "crons": ["0 3 * * *"] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomDurableObject"] }]
+}

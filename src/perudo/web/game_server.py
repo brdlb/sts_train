@@ -125,6 +125,9 @@ class GameSession:
         game_id: str,
         model_paths: List[str],
         db_game_id: int,
+        ai_player_model_paths: Optional[Dict[int, str]] = None,
+        human_player_ids: Optional[List[int]] = None,
+        player_names: Optional[Dict[int, str]] = None,
     ):
         """
         Initialize game session.
@@ -142,6 +145,13 @@ class GameSession:
         self.game_id = game_id
         self.db_game_id = db_game_id
         self.model_paths = model_paths
+        self.human_player_ids = set(human_player_ids or [0])
+        self.player_names = player_names or {}
+        if ai_player_model_paths is None:
+            ai_player_model_paths = {
+                i + 1: model_path for i, model_path in enumerate(model_paths)
+            }
+        self.ai_player_model_paths = ai_player_model_paths
         
         if web_config.debug:
             print(f"Initializing GameSession {game_id} with models: {model_paths}")
@@ -175,11 +185,9 @@ class GameSession:
         # Reset environment
         self.obs, self.info = self.env.reset()
 
-        # Create AI agents for players 1, 2, 3
+        # Create AI agents for bot-controlled seats.
         self.ai_agents: Dict[int, RLAgent] = {}
-        for i, model_path in enumerate(model_paths):
-            player_id = i + 1  # AI players are at positions 1, 2, 3
-            
+        for player_id, model_path in sorted(ai_player_model_paths.items()):
             # Validate model path exists
             if not os.path.exists(model_path):
                 error_msg = (
@@ -261,27 +269,35 @@ class GameSession:
         """Get game over status from environment."""
         return self.env.game_state.game_over
 
-    def _is_human_eliminated(self) -> bool:
+    def _are_all_humans_eliminated(self) -> bool:
         """
-        Check if human player (player 0) has been eliminated.
+        Check if every human-controlled player has been eliminated.
         
         Returns:
-            True if human player has no dice left, False otherwise
+            True if no human-controlled player has dice left, False otherwise
         """
-        return self.env.game_state.player_dice_count[0] == 0
+        return all(
+            self.env.game_state.player_dice_count[player_id] == 0
+            for player_id in self.human_player_ids
+        )
 
     def get_public_state(self) -> Dict[str, Any]:
+        """Backward-compatible state view for the legacy single-human game."""
+        return self.get_state_for_player(0)
+
+    def get_state_for_player(self, player_id: int) -> Dict[str, Any]:
         """
-        Get public game state (what human player can see).
+        Get game state filtered for a specific player.
 
         Returns:
-            Dictionary with game state (JSON-serializable)
+            Dictionary with game state (JSON-serializable). Only this player's
+            dice are included outside reveal moments.
         """
         game_state = self.env.game_state
         public_info = game_state.get_public_info()
 
         # Get player's own dice observation (contains numpy arrays)
-        player_dice_obs = self.env.get_observation_for_player(0)  # Human is player 0
+        player_dice_obs = self.env.get_observation_for_player(player_id)
         
         # Convert numpy arrays to Python lists for JSON serialization
         # Exclude action_mask as it's not needed on frontend
@@ -292,7 +308,7 @@ class GameSession:
         
         # Also get the actual dice values (not just observation)
         # This is more useful for the frontend to display player's dice
-        actual_player_dice = self.env.game_state.get_player_dice(0)
+        actual_player_dice = self.env.game_state.get_player_dice(player_id)
         player_dice["dice_values"] = list(actual_player_dice)
         
         # Convert bid_history to frontend format [player_id, quantity, value]
@@ -321,6 +337,7 @@ class GameSession:
         # Use custom encoder for serialization
         state = {
             "game_id": self.game_id,
+            "my_player_id": int(player_id),
             "current_player": int(self.current_player),
             "turn_number": int(self.turn_number),
             "game_over": bool(self.game_over),
@@ -335,6 +352,7 @@ class GameSession:
             "player_dice": player_dice,  # Only human player's dice
             "public_info": public_info,
             "awaiting_reveal_confirmation": bool(self.awaiting_reveal_confirmation),
+            "player_names": self.player_names,
         }
         
         # We return the dict, but the caller should use PerudoJSONEncoder when dumping to JSON
@@ -437,7 +455,7 @@ class GameSession:
         }
         return json.loads(json.dumps(result, cls=PerudoJSONEncoder))
 
-    async def make_human_action(self, action: int) -> Dict[str, Any]:
+    async def make_human_action(self, action: int, player_id: int = 0) -> Dict[str, Any]:
         """
         Make action for human player.
 
@@ -455,19 +473,22 @@ class GameSession:
             return {"error": "Game is currently processing other turns"}
             
         async with self.turn_lock:
-            if self.current_player != 0:
-                return {"error": "Not human player's turn"}
+            if player_id not in self.human_player_ids:
+                return {"error": "Player is not human-controlled"}
+
+            if self.current_player != player_id:
+                return {"error": "Not this player's turn"}
 
             # Set active player to human
-            self.env.set_active_player(0)
+            self.env.set_active_player(player_id)
             
-            logger.info(f"Game {self.game_id}: Human player (0) executing action {action}")
+            logger.info(f"Game {self.game_id}: Human player ({player_id}) executing action {action}")
 
             # Execute action
             obs, reward, terminated, truncated, info = self.env.step(action)
 
             # Process action using common method
-            result = self._process_action(0, action, reward, terminated, truncated, info)
+            result = self._process_action(player_id, action, reward, terminated, truncated, info)
             
             # Add success flag for human actions
             result["success"] = True
@@ -514,7 +535,7 @@ class GameSession:
                 
                 # Add delay before bot makes a move
                 # Use shorter delay (0.5s) if human player is eliminated, normal delay (1-4s) otherwise
-                if self._is_human_eliminated():
+                if self._are_all_humans_eliminated():
                     delay = 0.5
                 else:
                     delay = random.uniform(1.0, 3.0)

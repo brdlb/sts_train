@@ -10,15 +10,6 @@ const api = axios.create({
 });
 
 // Types
-export interface ModelInfo {
-  id: string;
-  path: string;
-  step: number | null;
-  elo: number | null;
-  winrate: number | null;
-  source: string;
-}
-
 export interface ActionConsequences {
   action_valid: boolean;
   dice_lost: number | null;
@@ -48,6 +39,7 @@ export interface ExtendedActionHistoryEntry {
 
 export interface GameState {
   game_id: string;
+  my_player_id?: number;
   current_player: number;
   turn_number: number;
   game_over: boolean;
@@ -66,6 +58,30 @@ export interface GameState {
   };
   public_info: any;
   awaiting_reveal_confirmation?: boolean; // Flag indicating if waiting for user to continue after reveal
+  player_names?: Record<number, string>;
+  state_version?: number;
+}
+
+export interface RoomSeat {
+  player_id: number;
+  seat_type: 'empty' | 'human' | 'bot';
+  player_name: string | null;
+  is_connected: boolean;
+}
+
+export interface Room {
+  room_id: string;
+  join_code: string;
+  status: 'lobby' | 'playing' | 'finished';
+  seats: RoomSeat[];
+  game_id: string | null;
+}
+
+export interface RoomEvent {
+  type: 'connected' | 'room_updated' | 'game_started' | 'state_updated' | 'action_rejected' | 'resync_required' | 'game_finished' | 'pong';
+  room: Room;
+  state?: GameState;
+  error?: string;
 }
 
 export interface CreateGameRequest {
@@ -133,34 +149,6 @@ export interface PlayerStatistics {
   winrate: number;
   avg_duration_seconds: number;
 }
-
-export interface ModelStatistics {
-  [modelPath: string]: {
-    games_count: number;
-    wins_count: number;
-    winrate: number;
-  };
-}
-
-// API functions
-export const modelsApi = {
-  list: async (): Promise<ModelInfo[]> => {
-    const response = await api.get<ModelInfo[]>('/models/list');
-    return response.data;
-  },
-
-  getInfo: async (modelId: string): Promise<ModelInfo> => {
-    const response = await api.get<ModelInfo>(`/models/${modelId}/info`);
-    return response.data;
-  },
-
-  validate: async (modelPath: string): Promise<{ valid: boolean; path: string }> => {
-    const response = await api.post('/models/validate', null, {
-      params: { model_path: modelPath },
-    });
-    return response.data;
-  },
-};
 
 export const gamesApi = {
   create: async (request: CreateGameRequest): Promise<{ game_id: string; state: GameState }> => {
@@ -248,24 +236,71 @@ export const gamesApi = {
   },
 };
 
+const getWsUrl = (roomId: string, playerToken: string): string => {
+  const encodedToken = encodeURIComponent(playerToken);
+  if (API_BASE_URL.startsWith('http://') || API_BASE_URL.startsWith('https://')) {
+    const url = new URL(API_BASE_URL);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.pathname = '/ws/rooms/' + roomId;
+    url.search = `player_token=${encodedToken}`;
+    return url.toString();
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/ws/rooms/${roomId}?player_token=${encodedToken}`;
+};
+
+export const roomsApi = {
+  create: async (playerName: string): Promise<{ room: Room; player_id: number; player_token: string }> => {
+    const response = await api.post<{ room: Room; player_id: number; player_token: string }>('/rooms', { player_name: playerName });
+    return response.data;
+  },
+
+  get: async (roomId: string): Promise<{ room: Room }> => {
+    const response = await api.get<{ room: Room }>(`/rooms/${roomId}`);
+    return response.data;
+  },
+
+  join: async (
+    roomId: string,
+    playerName: string,
+    playerToken?: string | null
+  ): Promise<{ room: Room; player_id: number; player_token: string }> => {
+    const response = await api.post(`/rooms/${roomId}/join`, {
+      player_name: playerName,
+      player_token: playerToken || undefined,
+    });
+    return response.data;
+  },
+
+  start: async (roomId: string, playerToken: string): Promise<{ room: Room; state: GameState }> => {
+    const response = await api.post<{ room: Room; state: GameState }>(`/rooms/${roomId}/start`, null, { headers: { Authorization: `Bearer ${playerToken}` } });
+    return response.data;
+  },
+
+  connect: (
+    roomId: string,
+    playerToken: string,
+    onEvent: (event: RoomEvent) => void,
+    onError?: (event: Event) => void
+  ): WebSocket => {
+    const socket = new WebSocket(getWsUrl(roomId, playerToken));
+    socket.onmessage = (event) => {
+      onEvent(JSON.parse(event.data));
+    };
+    socket.onerror = onError || ((event) => console.error('Room socket error:', event));
+    return socket;
+  },
+};
+
 export const statisticsApi = {
   getGames: async (): Promise<{
     total_games: number;
-    finished_games: number;
-    active_games: number;
+    average_duration_seconds?: number;
   }> => {
     const response = await api.get('/statistics/games');
     return response.data;
   },
 
-  getPlayer: async (): Promise<PlayerStatistics> => {
-    const response = await api.get<PlayerStatistics>('/statistics/player');
-    return response.data;
-  },
-
-  getModels: async (): Promise<ModelStatistics> => {
-    const response = await api.get<ModelStatistics>('/statistics/models');
-    return response.data;
-  },
 };
 

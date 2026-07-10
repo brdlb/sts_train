@@ -9,7 +9,8 @@ from contextlib import asynccontextmanager
 from .config import web_config
 from .database.database import init_db
 from .game_server import GameServer
-from .api import games, models, statistics
+from .room_server import RoomServer
+from .api import games, models, statistics, rooms
 
 
 @asynccontextmanager
@@ -21,13 +22,16 @@ async def lifespan(app: FastAPI):
 
     print("Initializing game server...")
     game_server = GameServer()
+    room_server = RoomServer(game_server)
 
     # Set game server in API modules
     games.set_game_server(game_server)
     models.set_game_server(game_server)
+    rooms.set_room_server(room_server)
 
     # Store in app state
     app.state.game_server = game_server
+    app.state.room_server = room_server
 
     yield
 
@@ -53,6 +57,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(games.router)
+app.include_router(rooms.router)
+app.include_router(rooms.ws_router)
 app.include_router(models.router)
 app.include_router(statistics.router)
 

@@ -1,5 +1,31 @@
 # Perudo RL Environment
 
+## Cloudflare Workers multiplayer release
+
+The production multiplayer build is a separate TypeScript runtime: it serves the
+compiled React SPA, routes every room to one Durable Object, and writes finished
+private games to D1. The Python application remains the local training/reference
+implementation and is not bundled into the Worker.
+
+1. Install Node dependencies at the repository root and in `frontend`:
+   `npm install` and `npm --prefix frontend install`.
+2. Authenticate once with `npx wrangler login`, then create the database with
+   `npx wrangler d1 create perudo-history`.
+3. Put the returned database ID in `wrangler.jsonc` (`database_id`). Do not
+   deploy with the placeholder value.
+4. Inspect pending production migrations with `npm run cf:migrations:preview`.
+   Apply them with `npm run cf:migrations:apply`.
+5. Run locally with `npm run cf:dev`, test the Worker with `npm run cf:test`,
+   and deploy the SPA/API/WebSocket endpoint with `npm run cf:deploy`.
+
+`wrangler versions list` shows deployed versions; use `wrangler rollback` with a
+selected version if a rollback is required. The Worker is published on its
+`*.workers.dev` URL by default; a custom domain is optional.
+
+Completed games expire from D1 after 30 days. Inactive rooms are removed after
+24 hours. Player tokens are only kept in browser local storage; the Worker and
+D1 store SHA-256 hashes.
+
 Reinforcement Learning environment for training AI agents to play Perudo (Liar's Dice).
 
 ## Description

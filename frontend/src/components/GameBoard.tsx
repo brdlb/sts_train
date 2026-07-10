@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { gamesApi, GameState, ExtendedActionHistoryEntry, ActionResult } from '../services/api';
+import { gamesApi, GameState, ExtendedActionHistoryEntry, ActionResult, Room, roomsApi } from '../services/api';
 import Player from './Player';
 import BidControls from './BidControls';
 import { GameHistory } from './GameHistory';
@@ -10,18 +10,36 @@ import { PLAYER_NAMES } from '../constants';
 
 interface GameBoardProps {
   gameId: string;
+  roomId?: string;
+  playerToken?: string;
+  myPlayerId?: number;
+  initialRoom?: Room;
   onGameEnd: () => void;
 }
 
-export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
+export const GameBoard: React.FC<GameBoardProps> = ({
+  gameId,
+  roomId,
+  playerToken,
+  myPlayerId,
+  initialRoom,
+  onGameEnd,
+}) => {
   const [gameState, setGameState] = useState<GameState | null>(null);
+  const [_room, setRoom] = useState<Room | null>(initialRoom || null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [gamePhase, setGamePhase] = useState<'bidding' | 'reveal' | 'round_over' | 'game_over'>('bidding');
   const [revealModalEntry, setRevealModalEntry] = useState<ExtendedActionHistoryEntry | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
   const isMountedRef = useRef(true);
+  const isMultiplayer = !!roomId && !!playerToken;
+  const sendRoomCommand = useCallback((type: 'make_action' | 'continue_round', action?: number) => {
+    if (!socketRef.current || !gameState) throw new Error('Room socket is not connected');
+    socketRef.current.send(JSON.stringify({ type, command_id: crypto.randomUUID(), expected_version: gameState.state_version ?? 0, ...(action === undefined ? {} : { action }) }));
+  }, [gameState]);
 
   const playerRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const bidControlsRef = useRef<HTMLDivElement | null>(null);
@@ -76,6 +94,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   }, []);
 
   const subscribeToAiTurns = useCallback(() => {
+    if (isMultiplayer) return;
+
     // Close any existing connection
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -122,7 +142,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     );
 
     eventSourceRef.current = eventSource;
-  }, [gameId, onGameEnd]);
+  }, [gameId, onGameEnd, isMultiplayer]);
 
   const handleGameOver = useCallback((result: ActionResult) => {
     if (result.game_over) {
@@ -140,6 +160,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   }, [handleGameOver, subscribeToAiTurns]);
 
   const loadGameState = useCallback(async (skipSSECheck: boolean = false) => {
+    if (isMultiplayer) return;
     if (!isMountedRef.current) return;
 
     if (!skipSSECheck && (eventSourceRef.current || processing)) {
@@ -169,9 +190,58 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
       console.error(err);
       setLoading(false);
     }
-  }, [gameId, onGameEnd, subscribeToAiTurns, processing]);
+  }, [gameId, onGameEnd, subscribeToAiTurns, processing, isMultiplayer]);
 
   useEffect(() => {
+    if (!isMultiplayer || !roomId || !playerToken) return;
+
+    setLoading(true);
+    setError(null);
+    const socket = roomsApi.connect(
+      roomId,
+      playerToken,
+      (event) => {
+        if (!isMountedRef.current) return;
+        setRoom(event.room);
+
+        if (event.state) {
+          setGameState(event.state);
+          setLoading(false);
+          setProcessing(false);
+
+          if (event.state.game_over || event.type === 'game_finished') {
+            setGamePhase('game_over');
+          } else if (event.state.awaiting_reveal_confirmation) {
+            setGamePhase('round_over');
+          } else {
+            setGamePhase('bidding');
+          }
+        }
+
+        if (event.type === 'action_rejected') {
+          setError(event.error || 'Action rejected');
+          setProcessing(false);
+          setGamePhase('bidding');
+        }
+      },
+      () => {
+        if (!isMountedRef.current) return;
+        setError('Connection error');
+        setLoading(false);
+        setProcessing(false);
+      }
+    );
+
+    socketRef.current = socket;
+
+    return () => {
+      socket.close();
+      socketRef.current = null;
+    };
+  }, [isMultiplayer, roomId, playerToken]);
+
+  useEffect(() => {
+    if (isMultiplayer) return;
     if (!isMountedRef.current) return;
 
     loadGameState(true);
@@ -194,7 +264,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         eventSourceRef.current = null;
       }
     };
-  }, [gameId, loadGameState, gameState?.game_over, processing, gameState?.current_player]);
+  }, [gameId, loadGameState, gameState?.game_over, processing, gameState?.current_player, isMultiplayer]);
 
 
   const lastAcknowledgedRevealTurnRef = useRef<number | null>(null);
@@ -238,7 +308,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
     const timeoutId = setTimeout(() => {
       const currentPlayer = gameState.current_player;
-      if (currentPlayer === 0) {
+      const currentMyPlayerId = gameState.my_player_id ?? myPlayerId ?? 0;
+      if (currentPlayer === currentMyPlayerId) {
         bidControlsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } else {
         const playerElement = playerRefs.current[currentPlayer];
@@ -247,7 +318,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     }, 700);
 
     return () => clearTimeout(timeoutId);
-  }, [gameState?.current_player, gameState?.turn_number]);
+  }, [gameState?.current_player, gameState?.turn_number, gameState?.my_player_id, myPlayerId]);
 
   const setPlayerRef = useCallback((playerId: number) => {
     return (el: HTMLDivElement | null) => {
@@ -261,6 +332,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     try {
       setProcessing(true);
       const action = encode_bid(quantity, value);
+      if (isMultiplayer && socketRef.current) {
+        sendRoomCommand('make_action', action);
+        return;
+      }
       const result = await gamesApi.makeAction(gameId, action);
       handleAfterAction(result);
     } catch (err) {
@@ -276,6 +351,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     try {
       setProcessing(true);
       setGamePhase('reveal');
+      if (isMultiplayer && socketRef.current) {
+        sendRoomCommand('make_action', 0);
+        return;
+      }
       const result = await gamesApi.makeAction(gameId, 0);
       handleAfterAction(result);
     } catch (err) {
@@ -292,6 +371,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
     try {
       setProcessing(true);
       setGamePhase('reveal');
+      if (isMultiplayer && socketRef.current) {
+        sendRoomCommand('make_action', 1);
+        return;
+      }
       const result = await gamesApi.makeAction(gameId, 1);
       handleAfterAction(result);
     } catch (err) {
@@ -352,18 +435,27 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
   const canBelieve = gameState.current_bid !== null && !gameState.believe_called;
   const totalDiceInPlay = gameState.player_dice_count.reduce((sum, count) => sum + count, 0);
   const lastBidderId = findLastBidderId(gameState);
+  const activeMyPlayerId = gameState.my_player_id ?? myPlayerId ?? 0;
 
   const displayPlayers = [];
-  for (let i = 1; i < gameState.player_dice_count.length; i++) {
-    displayPlayers.push(i);
+  for (let i = 0; i < gameState.player_dice_count.length; i++) {
+    if (i !== activeMyPlayerId) {
+      displayPlayers.push(i);
+    }
   }
-  displayPlayers.push(0);
+  displayPlayers.push(activeMyPlayerId);
+
+  const getPlayerName = (playerId: number) => (
+    gameState.player_names?.[playerId] || PLAYER_NAMES[playerId] || `Player ${playerId}`
+  );
 
   return (
     <div className="bg-gray-800 min-h-screen text-white p-4 sm:p-6 lg:p-8 flex flex-col items-center font-sans relative overflow-hidden">
       <div className="w-full max-w-7xl text-center mb-6 z-10 relative">
         <h1 className="text-5xl font-bold text-orange-400 mb-2">Perudo Game</h1>
-        <p className="text-gray-400 text-lg">Last player with dice wins!</p>
+        <p className="text-gray-400 text-lg">
+          Last player with dice wins!{_room ? ` Room ${_room.join_code}` : ''}
+        </p>
       </div>
 
 
@@ -374,11 +466,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
               ref={setPlayerRef(playerId)}
               key={playerId}
               playerId={playerId}
-              playerName={PLAYER_NAMES[playerId] || `Player ${playerId}`}
-              dice={playerId === 0 ? playerDice : []}
+              playerName={getPlayerName(playerId)}
+              dice={playerId === activeMyPlayerId ? playerDice : []}
               diceCount={gameState.player_dice_count[playerId]}
               isCurrent={gameState.current_player === playerId}
-              isHuman={playerId === 0}
+              isHuman={playerId === activeMyPlayerId}
               gamePhase={gamePhase}
               lastBid={gameState.current_bid}
               isLastBidder={lastBidderId === playerId}
@@ -389,17 +481,17 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
         </div>
 
         <div className="w-full space-y-4 flex flex-col">
-          {processing && gameState.current_player !== 0 && (
+          {processing && gameState.current_player !== activeMyPlayerId && (
             <div className="bg-gray-700/50 p-4 rounded-lg flex items-center justify-center space-x-3 w-full max-w-lg mx-auto">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-300"></div>
               <span className="text-xl font-semibold text-yellow-300">
-                {PLAYER_NAMES[gameState.current_player] || `Player ${gameState.current_player}`} is thinking...
+                {getPlayerName(gameState.current_player)} is thinking...
               </span>
             </div>
           )}
 
           <div ref={bidControlsRef} className="w-full flex justify-center">
-            {gameState.current_player === 0 && !gameState.game_over && gamePhase === 'bidding' && (
+            {gameState.current_player === activeMyPlayerId && !gameState.game_over && gamePhase === 'bidding' && (
               <BidControls
                 currentBid={gameState.current_bid}
                 maxQuantity={30}
@@ -410,15 +502,15 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
                 canBelieve={canBelieve}
                 disabled={processing}
                 totalDiceInPlay={totalDiceInPlay}
-                playerDiceCount={gameState.player_dice_count[0]}
+                playerDiceCount={gameState.player_dice_count[activeMyPlayerId]}
               />
             )}
           </div>
 
-          {gameState.current_player !== 0 && !gameState.game_over && gamePhase === 'bidding' && (
+          {gameState.current_player !== activeMyPlayerId && !gameState.game_over && gamePhase === 'bidding' && (
             <div className="bg-yellow-500/20 p-4 rounded-lg text-center">
               <p className="text-lg text-yellow-300">
-                Waiting for {PLAYER_NAMES[gameState.current_player] || `Player ${gameState.current_player}`} to make a move...
+                Waiting for {getPlayerName(gameState.current_player)} to make a move...
               </p>
             </div>
           )}
@@ -447,6 +539,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameId, onGameEnd }) => {
 
           if (gameState?.awaiting_reveal_confirmation) {
             try {
+              if (isMultiplayer && socketRef.current) {
+                sendRoomCommand('continue_round');
+                setGamePhase('bidding');
+                return;
+              }
               const result = await gamesApi.continueRound(gameId);
               setGameState(result.state);
               setGamePhase('bidding');

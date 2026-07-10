@@ -36,6 +36,9 @@ def create_game(
                 player_id=player_info["player_id"],
                 player_type=player_info["player_type"],
                 model_path=player_info.get("model_path"),
+                display_name=player_info.get("display_name"),
+                seat_type=player_info.get("seat_type", player_info["player_type"]),
+                join_token=player_info.get("join_token"),
             )
             db.add(player)
 
@@ -190,6 +193,8 @@ def get_game_history(db: Session, game_id: int) -> Dict[str, Any]:
                 "player_id": p.player_id,
                 "player_type": p.player_type,
                 "model_path": p.model_path,
+                "display_name": p.display_name,
+                "seat_type": p.seat_type,
             }
             for p in game.players
         ],
