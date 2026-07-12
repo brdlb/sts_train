@@ -46,6 +46,8 @@ export const applyAction = (s: RoomState, seat: number, action: Action, rng: Rng
   const loser = action.action_type === 'challenge' ? (actual < quantity ? s.lastBidPlayer : seat) : (exact ? null : seat);
   if (loser !== null) s.players[loser]!.diceCount--;
   if (action.action_type === 'believe' && exact && s.players[seat]!.diceCount < 5) s.players[seat]!.diceCount++;
+  const changedPlayer = loser ?? seat;
+  s.currentPlayer = s.players[changedPlayer]!.diceCount > 0 ? changedPlayer : nextActive(s, changedPlayer);
   // Only expose participants that were actually seated when the game began.
   // Empty room seats must not look like eliminated players in the reveal UI.
   const playerIds = s.players.flatMap((player) => player ? [player.seat] : []);
@@ -54,7 +56,7 @@ export const applyAction = (s: RoomState, seat: number, action: Action, rng: Rng
   s.awaitingReveal = true;
   if (active(s).length <= 1) { s.status = 'finished'; s.winner = active(s)[0] ?? null; }
 };
-export const continueRound = (s: RoomState, seat: number, rng: Rng = cryptoRng) => { if (!s.awaitingReveal) throw new Error('No round to continue'); beginRound(s, seat, rng); };
+export const continueRound = (s: RoomState, _seat: number, rng: Rng = cryptoRng) => { if (!s.awaitingReveal) throw new Error('No round to continue'); beginRound(s, s.currentPlayer, rng); };
 export const viewFor = (s: RoomState, seat: number) => {
   const playerIds = s.players.flatMap((player) => player ? [player.seat] : []);
   return { game_id: s.gameId, my_player_id: seat, current_player: s.currentPlayer, turn_number: s.history.length, game_over: s.status === 'finished', winner: s.winner, player_dice_count: s.players.map((p) => p?.diceCount ?? 0), player_ids: playerIds, current_bid: s.currentBid, bid_history: s.bidHistory, extended_action_history: s.history, palifico_active: s.palifico, believe_called: false, last_bid_player_id: s.lastBidPlayer, awaiting_reveal_confirmation: s.awaitingReveal, state_version: s.stateVersion, player_names: Object.fromEntries(s.players.filter(Boolean).map((p) => [p!.seat, p!.name])), player_dice: { bid_history: [], static_info: [], dice_values: s.players[seat]?.dice ?? [] } };
