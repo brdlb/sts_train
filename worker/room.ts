@@ -32,7 +32,7 @@ export class RoomDurableObject {
       }
       const seat = await this.seat(s, this.token(request)); if (seat < 0) return json({ error: 'Unauthorized' }, 401);
       if (request.method === 'POST' && parts.at(-1) === 'start') { if (seat !== s.hostSeat) return json({ error: 'Only the host can start' }, 403); startGame(s); s.stateVersion++; await this.save(s); await this.broadcast(s, 'game_started'); return json({ room: publicRoom(s), state: viewFor(s, seat) }); }
-      if (url.pathname.endsWith('/ws')) return this.acceptWebSocket(request, s, seat);
+      if (url.pathname.endsWith('/ws') || (parts[0] === 'ws' && parts[1] === 'rooms' && parts[2] === s.roomId)) return this.acceptWebSocket(request, s, seat);
       return json({ error: 'Not found' }, 404);
     } catch (error) { return json({ error: error instanceof Error ? error.message : 'Bad request' }, 400); }
   }
