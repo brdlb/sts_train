@@ -6,5 +6,6 @@ export const PLAYER_COLORS: string[] = [
   'bg-purple-600',
 ];
 
-export const PLAYER_NAMES = ['You (probably Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
+// Names are supplied by the room/game state. These are only legacy fallbacks.
+export const PLAYER_NAMES = ['Player 1', 'Player 2', 'Player 3', 'Player 4'];
 

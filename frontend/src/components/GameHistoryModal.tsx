@@ -8,9 +8,10 @@ interface GameHistoryModalProps {
 }
 
 const formatActionDescription = (
-  action: GameHistory['actions'][0]
+  action: GameHistory['actions'][0],
+  playerNames: Record<number, string>,
 ): { description: string; details?: string } => {
-  const playerName = getPlayerName(action.player_id);
+  const playerName = getPlayerName(action.player_id, playerNames);
   const { action_type, action_data } = action;
 
   if (action_type === 'bid') {
@@ -45,6 +46,9 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
   }
 
   const { game, players, actions } = history;
+  const playerNames = Object.fromEntries(
+    players.map((player) => [player.player_id, player.display_name]).filter(([, name]) => Boolean(name)),
+  ) as Record<number, string>;
 
   return (
     <div
@@ -77,7 +81,7 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
             </div>
             <div>
               <strong>Победитель:</strong>{' '}
-              {game.winner !== null ? getPlayerName(game.winner) : '-'}
+              {game.winner !== null ? getPlayerName(game.winner, playerNames) : '-'}
             </div>
             <div>
               <strong>Игроков:</strong> {game.num_players} • <strong>Ходов:</strong> {actions.length}
@@ -95,7 +99,7 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
                       player.player_id === 0 ? 'bg-blue-100' : 'bg-gray-100'
                     }`}
                   >
-                    {getPlayerName(player.player_id)}
+                    {getPlayerName(player.player_id, playerNames)}
                   </div>
                 ))}
             </div>
@@ -109,7 +113,7 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({ history, onC
           ) : (
             <div>
               {actions.map((action, index) => {
-                const actionInfo = formatActionDescription(action);
+                const actionInfo = formatActionDescription(action, playerNames);
                 const isHuman = action.player_id === 0;
                 const backgroundColor = isHuman
                   ? index % 2 === 0

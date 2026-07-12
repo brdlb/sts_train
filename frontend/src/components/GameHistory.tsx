@@ -6,10 +6,14 @@ interface GameHistoryProps {
   bidHistory: Array<[number, number, number]>;
   currentBid: [number, number] | null;
   extendedActionHistory?: ExtendedActionHistoryEntry[];
+  playerNames?: Record<number, string>;
 }
 
-const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
-  const playerName = getPlayerName(entry.player_id);
+const formatActionDescription = (
+  entry: ExtendedActionHistoryEntry,
+  playerNames?: Record<number, string>,
+): string => {
+  const playerName = getPlayerName(entry.player_id, playerNames);
   const { action_type, action_data, consequences } = entry;
 
   // Ensure consequences exists
@@ -26,7 +30,7 @@ const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
       ? ` ставку ${consequences.bid_quantity}x${consequences.bid_value}`
       : ' ставку';
     const bidderName = (consequences.bidder_id !== null && consequences.bidder_id !== undefined && typeof consequences.bidder_id === 'number')
-      ? getPlayerName(consequences.bidder_id)
+      ? getPlayerName(consequences.bidder_id, playerNames)
       : 'другого игрока';
 
     if (consequences.challenge_success === true) {
@@ -41,7 +45,7 @@ const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
       ? ` ставку ${consequences.bid_quantity}x${consequences.bid_value}`
       : ' ставку';
     const bidderName = (consequences.bidder_id !== null && consequences.bidder_id !== undefined && typeof consequences.bidder_id === 'number')
-      ? getPlayerName(consequences.bidder_id)
+      ? getPlayerName(consequences.bidder_id, playerNames)
       : 'другого игрока';
 
     if (consequences.believe_success === true) {
@@ -56,8 +60,7 @@ const formatActionDescription = (entry: ExtendedActionHistoryEntry): string => {
   return `${playerName}: ${action_type}`;
 };
 
-export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid, extendedActionHistory }) => {
-  const playerNames = ['You (probably Human)', 'AI Player 1', 'AI Player 2', 'AI Player 3'];
+export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid, extendedActionHistory, playerNames }) => {
 
   return (
     <div className="w-full h-full bg-gray-900/80 rounded-lg p-4 shadow-lg flex flex-col">
@@ -90,7 +93,7 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                   return null;
                 }
 
-                const actionDescription = formatActionDescription(entry);
+                const actionDescription = formatActionDescription(entry, playerNames);
                 const isHuman = entry.player_id === 0;
                 const bgColor = isHuman
                   ? (index % 2 === 0 ? 'bg-blue-900/30' : 'bg-blue-800/30')
@@ -117,7 +120,7 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                     </div>
                     {hasConsequences && entry.consequences.loser_id !== null && entry.consequences.loser_id !== undefined && typeof entry.consequences.loser_id === 'number' && (
                       <div className={`text-sm ${consequenceColor} mt-1`}>
-                        {getPlayerName(entry.consequences.loser_id)} lost {entry.consequences.dice_lost} die/dice
+                        {getPlayerName(entry.consequences.loser_id, playerNames)} lost {entry.consequences.dice_lost} die/dice
                       </div>
                     )}
                     {entry.consequences.actual_count !== null && entry.consequences.actual_count !== undefined && (
@@ -153,7 +156,7 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
                   key={`${playerId}-${quantity}-${value}-${index}`}
                   className={`p-2 rounded ${index % 2 === 0 ? 'bg-gray-800/50' : 'bg-gray-700/50'}`}
                 >
-                  <strong className="text-white">{playerNames[playerId] || `Player ${playerId}`}:</strong>
+                  <strong className="text-white">{getPlayerName(playerId, playerNames)}:</strong>
                   <span className="text-gray-300 ml-2">{quantity}x{value}</span>
                 </div>
               );
@@ -164,4 +167,3 @@ export const GameHistory: React.FC<GameHistoryProps> = ({ bidHistory, currentBid
     </div>
   );
 };
-

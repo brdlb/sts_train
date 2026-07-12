@@ -521,6 +521,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             bidHistory={gameState.bid_history}
             currentBid={gameState.current_bid}
             extendedActionHistory={gameState.extended_action_history}
+            playerNames={gameState.player_names}
           />
         </div>
       </div>

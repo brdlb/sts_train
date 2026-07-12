@@ -129,6 +129,8 @@ export interface GameHistory {
     player_id: number;
     player_type: string;
     model_path: string | null;
+    display_name?: string | null;
+    seat_type?: string | null;
   }>;
   actions: Array<{
     id: number;

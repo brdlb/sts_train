@@ -3,13 +3,16 @@
  */
 
 /**
- * Get player name based on player ID
- * @param playerId - The player ID (0 is human, others are AI)
+ * Get a player's display name from the names sent by the server.
+ * @param playerId - The player's seat ID
+ * @param playerNames - Names keyed by seat ID
  * @returns Player name string
  */
-export const getPlayerName = (playerId: number): string => {
-  if (playerId === 0) return 'You (probably Human)';
-  return `AI Player ${playerId}`;
+export const getPlayerName = (
+  playerId: number,
+  playerNames?: Record<number, string>,
+): string => {
+  return playerNames?.[playerId] || `Player ${playerId + 1}`;
 };
 
 
