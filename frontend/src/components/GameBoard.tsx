@@ -437,12 +437,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const lastBidderId = findLastBidderId(gameState);
   const activeMyPlayerId = gameState.my_player_id ?? myPlayerId ?? 0;
 
-  const displayPlayers = [];
-  for (let i = 0; i < gameState.player_dice_count.length; i++) {
-    if (i !== activeMyPlayerId) {
-      displayPlayers.push(i);
-    }
-  }
+  // The worker identifies the participants at game start. Fall back to the
+  // count array for legacy single-player API responses that do not send it.
+  const playerIds = gameState.player_ids ?? gameState.player_dice_count.map((_, playerId) => playerId);
+  const displayPlayers = playerIds.filter((playerId) => playerId !== activeMyPlayerId);
   displayPlayers.push(activeMyPlayerId);
 
   const getPlayerName = (playerId: number) => (
@@ -562,6 +560,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         }}
         actionEntry={revealModalEntry}
         isSpecialRound={gameState?.palifico_active?.some(p => p) || false}
+        playerNames={gameState?.player_names}
+        playerIds={gameState?.player_ids}
       />
 
       <GameOverModal

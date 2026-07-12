@@ -23,6 +23,7 @@ export interface ActionConsequences {
   error_msg: string | null;
   player_dice_count_after: number[];
   all_player_dice?: number[][]; // All player dice values during reveal (challenge/believe only)
+  player_ids?: number[]; // Player IDs matching all_player_dice; excludes empty room seats
 }
 
 export interface ExtendedActionHistoryEntry {
@@ -45,6 +46,7 @@ export interface GameState {
   game_over: boolean;
   winner: number | null;
   player_dice_count: number[];
+  player_ids?: number[]; // Players who started this game; excludes empty room seats
   current_bid: [number, number] | null;
   bid_history: Array<[number, number, number]>;
   extended_action_history?: ExtendedActionHistoryEntry[];

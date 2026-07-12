@@ -9,6 +9,8 @@ interface DiceRevealModalProps {
   onClose: () => void;
   actionEntry: ExtendedActionHistoryEntry | null;
   isSpecialRound?: boolean;
+  playerNames?: Record<number, string>;
+  playerIds?: number[];
 }
 
 const DiceRevealModal: React.FC<DiceRevealModalProps> = ({
@@ -16,6 +18,8 @@ const DiceRevealModal: React.FC<DiceRevealModalProps> = ({
   onClose,
   actionEntry,
   isSpecialRound = false,
+  playerNames,
+  playerIds,
 }) => {
   if (!isOpen || !actionEntry || !actionEntry.consequences || !actionEntry.consequences.all_player_dice) {
     return null;
@@ -44,9 +48,10 @@ const DiceRevealModal: React.FC<DiceRevealModalProps> = ({
   const diceLost = consequences.dice_lost || 0;
 
   // Build title
-  const challengerName = PLAYER_NAMES[challengerId] || `Player ${challengerId}`;
+  const playerNameFor = (playerId: number) => playerNames?.[playerId] || PLAYER_NAMES[playerId] || `Player ${playerId}`;
+  const challengerName = playerNameFor(challengerId);
   const bidderName = bidderId !== null && bidderId !== undefined
-    ? (PLAYER_NAMES[bidderId] || `Player ${bidderId}`)
+    ? playerNameFor(bidderId)
     : 'Unknown';
   
   let title = '';
@@ -117,8 +122,9 @@ const DiceRevealModal: React.FC<DiceRevealModalProps> = ({
         {/* All player dice */}
         <div className="space-y-4">
           <div className="text-lg font-semibold text-white">Кубики всех игроков:</div>
-          {allPlayerDice.map((playerDice, playerId) => {
-            const playerName = PLAYER_NAMES[playerId] || `Player ${playerId}`;
+          {allPlayerDice.map((playerDice, index) => {
+            const playerId = consequences.player_ids?.[index] ?? playerIds?.[index] ?? index;
+            const playerName = playerNameFor(playerId);
             const playerColor = PLAYER_COLORS[playerId % PLAYER_COLORS.length];
             const isLoser = loserId !== null && loserId === playerId;
             const countForBid = bidValue !== null ? countDiceForValue(playerDice, bidValue) : 0;

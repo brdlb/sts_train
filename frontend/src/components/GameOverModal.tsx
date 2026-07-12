@@ -20,8 +20,10 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
 
   const winner = gameState.winner;
   const isHumanWinner = winner === 0;
+  const playerNameFor = (playerId: number) => gameState.player_names?.[playerId] || PLAYER_NAMES[playerId] || `Player ${playerId}`;
+  const playerIds = gameState.player_ids ?? gameState.player_dice_count.map((_, playerId) => playerId);
   const winnerName = winner !== null
-    ? (PLAYER_NAMES[winner] || `Player ${winner}`)
+    ? playerNameFor(winner)
     : 'Unknown';
 
   // Calculate statistics from extended_action_history
@@ -74,8 +76,9 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
         <div className="bg-gray-700/50 rounded-lg p-4">
           <h3 className="text-xl font-semibold text-white mb-4">Финальное состояние кубиков:</h3>
           <div className="space-y-2">
-            {gameState.player_dice_count.map((diceCount, playerId) => {
-              const playerName = PLAYER_NAMES[playerId] || `Player ${playerId}`;
+            {playerIds.map((playerId) => {
+              const diceCount = gameState.player_dice_count[playerId];
+              const playerName = playerNameFor(playerId);
               const playerColor = PLAYER_COLORS[playerId % PLAYER_COLORS.length];
               const isWinner = playerId === winner;
 
@@ -144,8 +147,8 @@ const GameOverModal: React.FC<GameOverModalProps> = ({
           <div className="bg-gray-700/50 rounded-lg p-4">
             <h3 className="text-xl font-semibold text-white mb-3">Распределение действий:</h3>
             <div className="space-y-2">
-              {gameState.player_dice_count.map((_, playerId) => {
-                const playerName = PLAYER_NAMES[playerId] || `Player ${playerId}`;
+              {playerIds.map((playerId) => {
+                const playerName = playerNameFor(playerId);
                 const playerActions = gameState.extended_action_history?.filter(
                   e => e.player_id === playerId
                 ) || [];
